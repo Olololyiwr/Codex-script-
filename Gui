@@ -1,6 +1,6 @@
 --[[
-    Z-GUI v2.86
-    DEFAULT ANIMATION + TALL V2 + CROUCH FIX
+    Z-GUI v2.87
+    DEFAULT ANIMATION + TALL V2 + CROUCH ANIMATION FIX
 ]]
 
 if not game:IsLoaded() then game.Loaded:Wait() end
@@ -117,7 +117,7 @@ local TitleBar = Instance.new("TextLabel")
 TitleBar.Size = UDim2.new(1, 0, 0, 35)
 TitleBar.BackgroundColor3 = Color3.fromRGB(18, 21, 28)
 TitleBar.TextColor3 = Color3.fromRGB(255, 140, 0)
-TitleBar.Text = "  Z-GUI v2.86"
+TitleBar.Text = "  Z-GUI v2.87"
 TitleBar.Font = Enum.Font.GothamBold
 TitleBar.TextSize = 14
 TitleBar.TextXAlignment = Enum.TextXAlignment.Left
@@ -561,7 +561,9 @@ local function setupBaseController(character)
             local moving = humanoid.MoveDirection.Magnitude > 0.05
 
             if moving then
-                if humanoid.WalkSpeed >= 16 then
+                -- WalkSpeed 34 sẽ dùng Walk.
+                -- Run chỉ chạy khi WalkSpeed từ 36 trở lên.
+                if humanoid.WalkSpeed >= 36 then
                     playBaseAnimation("Run", humanoid.WalkSpeed / 16)
                 else
                     playBaseAnimation("Walk", math.max(0.5, humanoid.WalkSpeed / 16))
@@ -1071,6 +1073,7 @@ makeAction(Tab1C, "💾 Save TP GUI", 7, function()
         "https://raw.githubusercontent.com/0Ben1/fe/main/Tp%20Place%20GUI"
     ))()
 end)
+
 -- ==================== TAB 2 (TỐI ƯU & ESP & CROUCH) ====================
 
 local FixLagBtn = makeToggle(Tab2C, "FPS Boost (FixLag)", 1)
@@ -1279,8 +1282,9 @@ local crouchButton = nil
 local crouchButtonImage = "rbxassetid://109660173469064"
 local crouchButtonActiveImage = "rbxassetid://139705395031155"
 
-local crouchWalkAnimId = "rbxassetid://137525751454426"
-local crouchIdleAnimId = "rbxassetid://107078800928182"
+-- ĐÃ ĐỔI CHÉO ID: ID thực tế của Idle và Walk bị đặt ngược tên.
+local crouchWalkAnimId = "rbxassetid://107078800928182"
+local crouchIdleAnimId = "rbxassetid://137525751454426"
 
 local isCrouching = false
 local defaultWalkSpeed = 16
@@ -1501,7 +1505,6 @@ local function activateCrouchState()
 
         local isMoving = humanoid.MoveDirection.Magnitude > 0.05
 
-        -- ĐÚNG CHIỀU:
         -- Có di chuyển = Walk
         -- Đứng yên = Idle
         if isMoving then
@@ -1720,6 +1723,7 @@ makeToggle(Tab2C, "Crouch Mode 👣 (Bò/Ngồi)", 7, function(state)
         end
     end
 end)
+
 -- ==================== TAB 3 (TROLL & SCRIPTS) ====================
 
 makeAction(Tab3C, "👻 Invisible Script", 1, function()
@@ -2189,5 +2193,5 @@ ClearPropsBtn.MouseButton1Click:Connect(function()
     end
 end)
 
--- ==================== Z-GUI v2.86 READY ====================
-print("[Z-GUI] v2.86 loaded successfully.")
+-- ==================== Z-GUI v2.87 READY ====================
+print("[Z-GUI] v2.87 loaded successfully.")
