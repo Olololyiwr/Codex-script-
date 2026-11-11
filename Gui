@@ -1,6 +1,7 @@
 --[[
     Z-GUI v2.87
-    DEFAULT ANIMATION + TALL V2 + CROUCH ANIMATION FIX
+    DEFAULT ANIMATION JUMP FIX + WALK/RUN 35
+    CROUCH ANIMATION DIRECTION FIX
 ]]
 
 if not game:IsLoaded() then game.Loaded:Wait() end
@@ -376,7 +377,6 @@ local function makeAction(parent, text, order, callback)
 end
 
 -- ==================== ANIMATION CONTROL CORE ====================
--- Chỉ một animation mode tùy chỉnh được quyền điều khiển tại một thời điểm.
 local AnimationControl = {
     Owner = nil,
     BaseTracks = {},
@@ -532,6 +532,33 @@ local function setupBaseController(character)
         end
     end
 
+    -- Giữ Jump trong một khoảng ngắn khi vừa chuyển sang Freefall.
+    local jumpHoldUntil = 0
+    local JUMP_TRANSITION_HOLD = 0.18
+
+    -- Bắt sự kiện Jumping ngay khi nó xảy ra, không chỉ kiểm tra Heartbeat.
+    table.insert(
+        AnimationControl.BaseConnections,
+        humanoid.StateChanged:Connect(function(_, newState)
+            if AnimationControl.Character ~= character
+                or AnimationControl.Owner
+                or not AnimationControl.Enabled
+                or humanoid.Health <= 0 then
+                return
+            end
+
+            if newState == Enum.HumanoidStateType.Jumping then
+                jumpHoldUntil = os.clock() + JUMP_TRANSITION_HOLD
+                playBaseAnimation("Jump")
+            elseif newState == Enum.HumanoidStateType.Freefall then
+                jumpHoldUntil = math.max(
+                    jumpHoldUntil,
+                    os.clock() + JUMP_TRANSITION_HOLD
+                )
+            end
+        end)
+    )
+
     local function update()
         if AnimationControl.Character ~= character
             or AnimationControl.Owner
@@ -544,10 +571,15 @@ local function setupBaseController(character)
         local state = humanoid:GetState()
 
         if state == Enum.HumanoidStateType.Jumping then
+            jumpHoldUntil = os.clock() + JUMP_TRANSITION_HOLD
             playBaseAnimation("Jump")
 
         elseif state == Enum.HumanoidStateType.Freefall then
-            playBaseAnimation("Fall")
+            if os.clock() < jumpHoldUntil then
+                playBaseAnimation("Jump")
+            else
+                playBaseAnimation("Fall")
+            end
 
         elseif state == Enum.HumanoidStateType.Climbing then
             playBaseAnimation("Climb")
@@ -561,9 +593,7 @@ local function setupBaseController(character)
             local moving = humanoid.MoveDirection.Magnitude > 0.05
 
             if moving then
-                -- WalkSpeed 34 sẽ dùng Walk.
-                -- Run chỉ chạy khi WalkSpeed từ 36 trở lên.
-                if humanoid.WalkSpeed >= 36 then
+                if humanoid.WalkSpeed >= 35 then
                     playBaseAnimation("Run", humanoid.WalkSpeed / 16)
                 else
                     playBaseAnimation("Walk", math.max(0.5, humanoid.WalkSpeed / 16))
@@ -1282,7 +1312,7 @@ local crouchButton = nil
 local crouchButtonImage = "rbxassetid://109660173469064"
 local crouchButtonActiveImage = "rbxassetid://139705395031155"
 
--- ĐÃ ĐỔI CHÉO ID: ID thực tế của Idle và Walk bị đặt ngược tên.
+-- Đã đảo ID để khớp chiều animation thực tế.
 local crouchWalkAnimId = "rbxassetid://107078800928182"
 local crouchIdleAnimId = "rbxassetid://137525751454426"
 
@@ -1505,8 +1535,6 @@ local function activateCrouchState()
 
         local isMoving = humanoid.MoveDirection.Magnitude > 0.05
 
-        -- Có di chuyển = Walk
-        -- Đứng yên = Idle
         if isMoving then
             if crouchIdleAnimTrack.IsPlaying then
                 crouchIdleAnimTrack:Stop(0.12)
@@ -1859,7 +1887,6 @@ local function startTallController(character)
         return
     end
 
-    -- Dọn controller Tall cũ nhưng không khôi phục thông số ở lần respawn.
     if tallConnection then
         tallConnection:Disconnect()
         tallConnection = nil
@@ -1974,7 +2001,6 @@ local function startTallController(character)
             return
         end
 
-        -- Duy trì thông số Tall khi đang bật.
         humanoid.WalkSpeed = tallWalkSpeed
         humanoid.UseJumpPower = true
         humanoid.JumpPower = tallJumpPower
@@ -2028,7 +2054,6 @@ local function startTallController(character)
         end
     end)
 
-    -- Chạy animation phù hợp ngay sau khi controller khởi tạo.
     playTallAnimation("Idle")
 end
 
@@ -2037,7 +2062,6 @@ local function disableTall()
 
     stopTallController()
 
-    -- Khôi phục animation mặc định sau khi Tall nhường quyền.
     local character = LocalPlayer.Character
 
     if character then
@@ -2067,7 +2091,6 @@ makeToggle(Tab3C, "📏 Tall v2", 4, function(state)
     end
 end)
 
--- Tall v2 tự khởi tạo lại animation trên nhân vật mới khi respawn.
 LocalPlayer.CharacterAdded:Connect(function(character)
     if not tallEnabled then return end
 
