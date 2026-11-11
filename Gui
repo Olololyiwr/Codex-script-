@@ -376,6 +376,7 @@ local function makeAction(parent, text, order, callback)
     return button
 end
 
+
 -- ==================== ANIMATION CONTROL CORE ====================
 local AnimationControl = {
     Owner = nil,
@@ -450,12 +451,90 @@ local function loadAnimationTrack(animator, animationId, priority, looped)
     return track
 end
 
+local jumpAssistForce = nil
+local jumpAssistAttachment = nil
+local jumpAssistRoot = nil
+
+-- Hỗ trợ nhảy nhẹ, không thay đổi trọng lực toàn bản đồ.
+local JUMP_GRAVITY_REDUCTION = 0.12
+
+local function stopDefaultJumpAssist()
+    if jumpAssistForce then
+        jumpAssistForce:Destroy()
+        jumpAssistForce = nil
+    end
+
+    if jumpAssistAttachment then
+        jumpAssistAttachment:Destroy()
+        jumpAssistAttachment = nil
+    end
+
+    jumpAssistRoot = nil
+end
+
+local function startDefaultJumpAssist(character)
+    local root = character and character:FindFirstChild("HumanoidRootPart")
+    if not root then return end
+
+    if jumpAssistRoot == root and jumpAssistForce then
+        return
+    end
+
+    stopDefaultJumpAssist()
+
+    local attachment = Instance.new("Attachment")
+    attachment.Name = "ZGuiJumpAssistAttachment"
+    attachment.Parent = root
+
+    local force = Instance.new("VectorForce")
+    force.Name = "ZGuiJumpAssistForce"
+    force.Attachment0 = attachment
+    force.RelativeTo = Enum.ActuatorRelativeTo.World
+    force.ApplyAtCenterOfMass = true
+    force.Force = Vector3.zero
+    force.Parent = root
+
+    jumpAssistAttachment = attachment
+    jumpAssistForce = force
+    jumpAssistRoot = root
+end
+
+local function updateDefaultJumpAssist(humanoid, root)
+    if not jumpAssistForce
+        or not jumpAssistRoot
+        or jumpAssistRoot ~= root
+        or not root.Parent then
+        return
+    end
+
+    local state = humanoid:GetState()
+
+    local airborne =
+        state == Enum.HumanoidStateType.Jumping
+        or state == Enum.HumanoidStateType.Freefall
+
+    if airborne then
+        local gravity = Workspace.Gravity
+        local mass = root.AssemblyMass
+
+        jumpAssistForce.Force = Vector3.new(
+            0,
+            mass * gravity * JUMP_GRAVITY_REDUCTION,
+            0
+        )
+    else
+        stopDefaultJumpAssist()
+    end
+end
+
 local function clearBaseController()
     for _, connection in ipairs(AnimationControl.BaseConnections) do
         connection:Disconnect()
     end
 
     table.clear(AnimationControl.BaseConnections)
+
+    stopDefaultJumpAssist()
     stopTrackSet(AnimationControl.BaseTracks)
     table.clear(AnimationControl.BaseTracks)
 end
@@ -493,7 +572,9 @@ local function setupBaseController(character)
     AnimationControl.Animator = nil
 
     local humanoid = character:WaitForChild("Humanoid", 10)
-    if not humanoid or humanoid.RigType ~= Enum.HumanoidRigType.R15 then
+
+    if not humanoid
+        or humanoid.RigType ~= Enum.HumanoidRigType.R15 then
         return
     end
 
@@ -520,8 +601,12 @@ local function setupBaseController(character)
                 animator,
                 animationId,
                 priorities[name],
-                name == "Idle" or name == "Walk" or name == "Run"
-                    or name == "Fall" or name == "Climb"
+                name == "Idle"
+                    or name == "Walk"
+                    or name == "Run"
+                    or name == "Jump"
+                    or name == "Fall"
+                    or name == "Climb"
             )
         end)
 
@@ -532,50 +617,33 @@ local function setupBaseController(character)
         end
     end
 
-    -- Giữ Jump trong một khoảng ngắn khi vừa chuyển sang Freefall.
-    local jumpHoldUntil = 0
-    local JUMP_TRANSITION_HOLD = 0.18
+    local root = character:FindFirstChild("HumanoidRootPart")
+        or character:WaitForChild("HumanoidRootPart", 5)
 
-    -- Bắt sự kiện Jumping ngay khi nó xảy ra, không chỉ kiểm tra Heartbeat.
-    table.insert(
-        AnimationControl.BaseConnections,
-        humanoid.StateChanged:Connect(function(_, newState)
-            if AnimationControl.Character ~= character
-                or AnimationControl.Owner
-                or not AnimationControl.Enabled
-                or humanoid.Health <= 0 then
-                return
-            end
-
-            if newState == Enum.HumanoidStateType.Jumping then
-                jumpHoldUntil = os.clock() + JUMP_TRANSITION_HOLD
-                playBaseAnimation("Jump")
-            elseif newState == Enum.HumanoidStateType.Freefall then
-                jumpHoldUntil = math.max(
-                    jumpHoldUntil,
-                    os.clock() + JUMP_TRANSITION_HOLD
-                )
-            end
-        end)
-    )
+    if not root then return end
 
     local function update()
         if AnimationControl.Character ~= character
             or AnimationControl.Owner
             or not AnimationControl.Enabled
             or humanoid.Health <= 0 then
+
             stopBaseAnimations()
+            stopDefaultJumpAssist()
             return
         end
 
         local state = humanoid:GetState()
 
+        updateDefaultJumpAssist(humanoid, root)
+
         if state == Enum.HumanoidStateType.Jumping then
-            jumpHoldUntil = os.clock() + JUMP_TRANSITION_HOLD
             playBaseAnimation("Jump")
 
         elseif state == Enum.HumanoidStateType.Freefall then
-            if os.clock() < jumpHoldUntil then
+            -- Chỉ phát Jump khi nhân vật còn đang đi lên.
+            -- Khi vận tốc dọc chuyển sang âm, chuyển sang Fall.
+            if root.AssemblyLinearVelocity.Y > 0.5 then
                 playBaseAnimation("Jump")
             else
                 playBaseAnimation("Fall")
@@ -587,6 +655,7 @@ local function setupBaseController(character)
         elseif state == Enum.HumanoidStateType.Swimming
             or state == Enum.HumanoidStateType.Seated
             or state == Enum.HumanoidStateType.Dead then
+
             stopBaseAnimations()
 
         else
@@ -596,13 +665,39 @@ local function setupBaseController(character)
                 if humanoid.WalkSpeed >= 35 then
                     playBaseAnimation("Run", humanoid.WalkSpeed / 16)
                 else
-                    playBaseAnimation("Walk", math.max(0.5, humanoid.WalkSpeed / 16))
+                    playBaseAnimation(
+                        "Walk",
+                        math.max(0.5, humanoid.WalkSpeed / 16)
+                    )
                 end
             else
                 playBaseAnimation("Idle")
             end
         end
     end
+
+    table.insert(
+        AnimationControl.BaseConnections,
+        humanoid.StateChanged:Connect(function(_, newState)
+            if AnimationControl.Character ~= character
+                or AnimationControl.Owner
+                or not AnimationControl.Enabled
+                or humanoid.Health <= 0 then
+                return
+            end
+
+            if newState == Enum.HumanoidStateType.Jumping then
+                startDefaultJumpAssist(character)
+                playBaseAnimation("Jump")
+
+            elseif newState == Enum.HumanoidStateType.Freefall then
+                startDefaultJumpAssist(character)
+
+            else
+                stopDefaultJumpAssist()
+            end
+        end)
+    )
 
     table.insert(
         AnimationControl.BaseConnections,
@@ -616,12 +711,15 @@ local function setAnimationOwner(owner)
     AnimationControl.Owner = owner
 
     if owner then
+        stopDefaultJumpAssist()
         stopBaseAnimations()
     end
 end
 
 LocalPlayer.CharacterAdded:Connect(function(character)
     task.wait(0.5)
+
+    stopDefaultJumpAssist()
 
     AnimationControl.Owner = nil
     AnimationControl.Tracks = {}
@@ -632,8 +730,6 @@ end)
 if LocalPlayer.Character then
     task.spawn(setupBaseController, LocalPlayer.Character)
 end
-
--- ==================== TAB 1 (CHÍNH) ====================
 
 -- 1. GOD MODE
 local godModeEnabled = false
