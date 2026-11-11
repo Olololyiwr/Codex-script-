@@ -1,6 +1,8 @@
 
 --[[
-    Z-GUI v2.85 (INTEGRATED GOD MODE + LOW GRAVITY FIX)
+    Z-GUI v2.86
+    DEFAULT ANIMATION + TALL V2
+    Based on Z-GUI v2.85
 ]]
 
 if not game:IsLoaded() then game.Loaded:Wait() end
@@ -99,7 +101,7 @@ TitleBar.Size, TitleBar.BackgroundColor3, TitleBar.TextColor3, TitleBar.Text =
     UDim2.new(1, 0, 0, 35),
     Color3.fromRGB(18, 21, 28),
     Color3.fromRGB(255, 140, 0),
-    "  Z-GUI v2.85"
+    "  Z-GUI v2.86"
 
 TitleBar.Font, TitleBar.TextSize, TitleBar.TextXAlignment =
     Enum.Font.GothamBold, 14, Enum.TextXAlignment.Left
@@ -295,6 +297,340 @@ local function makeAction(p, text, order, cb)
 
     return b
 end
+
+-- ==================== ANIMATION CONTROLLER ====================
+-- Z-GUI mặc định dùng bộ animation V3.
+-- Tall v2 đổi sang bộ animation V4 khi bật.
+
+local DEFAULT_ANIMATIONS = {
+    idle = "rbxassetid://110939321724226",
+    walk = "rbxassetid://102031415992902",
+    run = "rbxassetid://105492432746214",
+    jump = "rbxassetid://123814879688543",
+    fall = "rbxassetid://132358096834201",
+    climb = "rbxassetid://74422682039842"
+}
+
+local TALL_ANIMATIONS = {
+    idle = "rbxassetid://126434942381136",
+    walk = "rbxassetid://89394284567845",
+    run = "rbxassetid://86307113372364",
+    jump = "rbxassetid://79132772327147",
+    fall = "rbxassetid://130110574826958",
+    climb = "rbxassetid://74422682039842"
+}
+
+local TALL_WALK_SPEED = 34
+local TALL_JUMP_POWER = 75
+local TALL_JUMP_HEIGHT = 7.2
+local ANIMATION_RUN_THRESHOLD = 16
+
+local tallV2Enabled = false
+local animationTracks = {}
+local animationConnections = {}
+local animationHumanoid = nil
+local animationCharacter = nil
+local savedTallMovement = nil
+
+local function stopAnimationTracks()
+    for _, track in pairs(animationTracks) do
+        if track then
+            pcall(function()
+                track:Stop(0.12)
+                track:Destroy()
+            end)
+        end
+    end
+
+    table.clear(animationTracks)
+end
+
+local function cleanupAnimationController()
+    for _, connection in pairs(animationConnections) do
+        if connection then
+            connection:Disconnect()
+        end
+    end
+
+    table.clear(animationConnections)
+    stopAnimationTracks()
+end
+
+local function loadCustomAnimation(animator, animationId, looped)
+    local animation = Instance.new("Animation")
+    animation.AnimationId = animationId
+
+    local success, track = pcall(function()
+        return animator:LoadAnimation(animation)
+    end)
+
+    animation:Destroy()
+
+    if not success then
+        warn("[Z-GUI Animation] Không thể tải animation:", animationId, track)
+        return nil
+    end
+
+    track.Priority = Enum.AnimationPriority.Action2
+    track.Looped = looped
+
+    return track
+end
+
+local function playCustomAnimation(name)
+    local selected = animationTracks[name]
+    if not selected then return end
+
+    for otherName, otherTrack in pairs(animationTracks) do
+        if otherName ~= name and otherTrack and otherTrack.IsPlaying then
+            otherTrack:Stop(0.12)
+        end
+    end
+
+    if not selected.IsPlaying then
+        selected:Play(0.12)
+    end
+end
+
+local function stopCustomAnimations()
+    for _, track in pairs(animationTracks) do
+        if track and track.IsPlaying then
+            track:Stop(0.12)
+        end
+    end
+end
+
+local function updateCustomMovement(speedValue)
+    local humanoid = animationHumanoid
+
+    if not humanoid or not humanoid.Parent or humanoid.Health <= 0 then
+        stopCustomAnimations()
+        return
+    end
+
+    local state = humanoid:GetState()
+
+    if state == Enum.HumanoidStateType.Jumping
+        or state == Enum.HumanoidStateType.Freefall
+        or state == Enum.HumanoidStateType.Climbing
+        or state == Enum.HumanoidStateType.Swimming
+        or state == Enum.HumanoidStateType.Seated
+        or state == Enum.HumanoidStateType.Dead then
+        return
+    end
+
+    if speedValue <= 0.5 then
+        playCustomAnimation("idle")
+    elseif speedValue <= ANIMATION_RUN_THRESHOLD then
+        playCustomAnimation("walk")
+    else
+        playCustomAnimation("run")
+    end
+end
+
+local function handleCustomHumanoidState(_, newState)
+    if not animationHumanoid then return end
+
+    if newState == Enum.HumanoidStateType.Jumping then
+        playCustomAnimation("jump")
+
+    elseif newState == Enum.HumanoidStateType.Freefall then
+        playCustomAnimation("fall")
+
+    elseif newState == Enum.HumanoidStateType.Climbing then
+        playCustomAnimation("climb")
+
+    elseif newState == Enum.HumanoidStateType.Swimming
+        or newState == Enum.HumanoidStateType.Seated
+        or newState == Enum.HumanoidStateType.Dead then
+        stopCustomAnimations()
+
+    else
+        task.defer(function()
+            if not animationHumanoid or not animationHumanoid.Parent then
+                return
+            end
+
+            if animationHumanoid:GetState() == newState then
+                local root = animationCharacter
+                    and animationCharacter:FindFirstChild("HumanoidRootPart")
+
+                local movementSpeed = 0
+
+                if root then
+                    local velocity = root.AssemblyLinearVelocity
+                    movementSpeed = Vector3.new(
+                        velocity.X,
+                        0,
+                        velocity.Z
+                    ).Magnitude
+                end
+
+                updateCustomMovement(movementSpeed)
+            end
+        end)
+    end
+end
+
+local function saveTallMovement(humanoid)
+    if savedTallMovement and savedTallMovement.humanoid == humanoid then
+        return
+    end
+
+    savedTallMovement = {
+        humanoid = humanoid,
+        WalkSpeed = humanoid.WalkSpeed,
+        UseJumpPower = humanoid.UseJumpPower,
+        JumpPower = humanoid.JumpPower,
+        JumpHeight = humanoid.JumpHeight
+    }
+end
+
+local function applyTallMovement(humanoid)
+    if not humanoid then return end
+
+    saveTallMovement(humanoid)
+
+    humanoid.UseJumpPower = true
+    humanoid.WalkSpeed = TALL_WALK_SPEED
+    humanoid.JumpPower = TALL_JUMP_POWER
+    humanoid.JumpHeight = TALL_JUMP_HEIGHT
+
+    if animationConnections.tallMovement then
+        animationConnections.tallMovement:Disconnect()
+    end
+
+    animationConnections.tallMovement =
+        RunService.Heartbeat:Connect(function()
+            if not tallV2Enabled or not humanoid.Parent then
+                return
+            end
+
+            if humanoid.WalkSpeed ~= TALL_WALK_SPEED then
+                humanoid.WalkSpeed = TALL_WALK_SPEED
+            end
+
+            if not humanoid.UseJumpPower then
+                humanoid.UseJumpPower = true
+            end
+
+            if humanoid.JumpPower ~= TALL_JUMP_POWER then
+                humanoid.JumpPower = TALL_JUMP_POWER
+            end
+
+            if humanoid.JumpHeight ~= TALL_JUMP_HEIGHT then
+                humanoid.JumpHeight = TALL_JUMP_HEIGHT
+            end
+        end)
+end
+
+local function restoreTallMovement(humanoid)
+    if animationConnections.tallMovement then
+        animationConnections.tallMovement:Disconnect()
+        animationConnections.tallMovement = nil
+    end
+
+    local saved = savedTallMovement
+
+    if not saved or saved.humanoid ~= humanoid or not humanoid or not humanoid.Parent then
+        savedTallMovement = nil
+        return
+    end
+
+    pcall(function()
+        humanoid.UseJumpPower = saved.UseJumpPower
+        humanoid.WalkSpeed = saved.WalkSpeed
+        humanoid.JumpPower = saved.JumpPower
+        humanoid.JumpHeight = saved.JumpHeight
+    end)
+
+    savedTallMovement = nil
+end
+
+local function applyAnimationSet(character)
+    cleanupAnimationController()
+
+    animationCharacter = character
+
+    local humanoid = character:WaitForChild("Humanoid")
+
+    if humanoid.RigType ~= Enum.HumanoidRigType.R15 then
+        warn("[Z-GUI Animation] Chỉ hỗ trợ R15.")
+        return
+    end
+
+    local animator = humanoid:WaitForChild("Animator")
+    animationHumanoid = humanoid
+
+    if tallV2Enabled then
+        applyTallMovement(humanoid)
+    end
+
+    local selectedSet = tallV2Enabled
+        and TALL_ANIMATIONS
+        or DEFAULT_ANIMATIONS
+
+    animationTracks.idle = loadCustomAnimation(
+        animator, selectedSet.idle, true
+    )
+
+    animationTracks.walk = loadCustomAnimation(
+        animator, selectedSet.walk, true
+    )
+
+    animationTracks.run = loadCustomAnimation(
+        animator, selectedSet.run, true
+    )
+
+    animationTracks.jump = loadCustomAnimation(
+        animator, selectedSet.jump, false
+    )
+
+    animationTracks.fall = loadCustomAnimation(
+        animator, selectedSet.fall, true
+    )
+
+    animationTracks.climb = loadCustomAnimation(
+        animator, selectedSet.climb, true
+    )
+
+    animationConnections.running =
+        humanoid.Running:Connect(updateCustomMovement)
+
+    animationConnections.state =
+        humanoid.StateChanged:Connect(handleCustomHumanoidState)
+
+    updateCustomMovement(0)
+end
+
+local function setTallV2(enabled)
+    tallV2Enabled = enabled
+
+    local character = LocalPlayer.Character
+    if not character then return end
+
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+
+    if enabled then
+        if humanoid then
+            applyTallMovement(humanoid)
+        end
+    else
+        restoreTallMovement(humanoid)
+    end
+
+    task.spawn(applyAnimationSet, character)
+end
+
+-- Chạy animation mặc định ngay khi Z-GUI khởi động.
+if LocalPlayer.Character then
+    task.spawn(applyAnimationSet, LocalPlayer.Character)
+end
+
+LocalPlayer.CharacterAdded:Connect(function(character)
+    savedTallMovement = nil
+    task.spawn(applyAnimationSet, character)
+end)
 
 -- ==================== TAB 1 (CHÍNH) ====================
 
@@ -1176,10 +1512,9 @@ makeToggle(Tab3C, "💥 Touch Fling", 3, function(st)
     end
 end)
 
-makeAction(Tab3C, "📏 Tall Script", 4, function()
-    pcall(function()
-        loadstring(game:HttpGet("https://scriptblox.com/raw/Universal-Script-Tall-246138"))()
-    end)
+-- TALL V2 (ON/OFF)
+makeToggle(Tab3C, "📏 Tall v2", 4, function(st)
+    setTallV2(st)
 end)
 
 makeAction(Tab3C, "🎯 FE Bring Player", 5, function()
