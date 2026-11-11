@@ -1,11 +1,25 @@
 
 --[[
     Z-GUI v2.86
-    DEFAULT ANIMATION + TALL V2
+    Animation Priority Fix + Fly/Crouch Integration
     Based on Z-GUI v2.85
 ]]
 
 if not game:IsLoaded() then game.Loaded:Wait() end
+
+-- ==================== SHARED ANIMATION STATE ====================
+local sharedEnv = (getgenv and getgenv()) or _G
+
+sharedEnv.ZGuiAnimationState = sharedEnv.ZGuiAnimationState or {
+    FlyActive = false,
+    CrouchActive = false,
+    Controller = "Default"
+}
+
+local AnimationState = sharedEnv.ZGuiAnimationState
+AnimationState.FlyActive = false
+AnimationState.CrouchActive = false
+AnimationState.Controller = "Default"
 
 -- ==================== MOBILE CURSOR SETTINGS & LOADER ====================
 getgenv().MobileCursorSettings = {
@@ -21,13 +35,20 @@ end)
 -- ==================== ANTI FLING & ANTI KICK ====================
 pcall(function()
     loadstring(game:HttpGet("https://rawscripts.net/raw/Universal-Script-Anti-fling-73205"))()
+
     local mt = getrawmetatable(game)
     setreadonly(mt, false)
+
     local old = mt.__namecall
+
     mt.__namecall = newcclosure(function(self, ...)
-        if getnamecallmethod():lower() == "kick" then return end
+        if getnamecallmethod():lower() == "kick" then
+            return
+        end
+
         return old(self, ...)
     end)
+
     setreadonly(mt, true)
 end)
 
@@ -41,32 +62,298 @@ local Stats = game:GetService("Stats")
 
 LocalPlayer.Idled:Connect(function()
     pcall(function()
-        game:GetService("VirtualUser"):Button2Down(Vector2.new(0,0), workspace.CurrentCamera.CFrame)
+        game:GetService("VirtualUser"):Button2Down(
+            Vector2.new(0, 0),
+            workspace.CurrentCamera.CFrame
+        )
+
         task.wait(1)
-        game:GetService("VirtualUser"):Button2Up(Vector2.new(0,0), workspace.CurrentCamera.CFrame)
+
+        game:GetService("VirtualUser"):Button2Up(
+            Vector2.new(0, 0),
+            workspace.CurrentCamera.CFrame
+        )
     end)
+end)
+
+-- ==================== DEFAULT Z-GUI ANIMATION ====================
+local DEFAULT_ANIMATIONS = {
+    idle = "rbxassetid://110939321724226",
+    walk = "rbxassetid://102031415992902",
+    run = "rbxassetid://105492432746214",
+    jump = "rbxassetid://123814879688543",
+    fall = "rbxassetid://132358096834201",
+    climb = "rbxassetid://74422682039842"
+}
+
+local DEFAULT_RUN_THRESHOLD = 16
+
+local defaultTracks = {}
+local defaultConnections = {}
+local defaultHumanoid
+local defaultCharacter
+
+local function stopDefaultAnimations()
+    for _, track in pairs(defaultTracks) do
+        if track and track.IsPlaying then
+            pcall(function()
+                track:Stop(0.12)
+            end)
+        end
+    end
+end
+
+local function cleanupDefaultAnimations()
+    for _, connection in pairs(defaultConnections) do
+        if connection then
+            connection:Disconnect()
+        end
+    end
+
+    table.clear(defaultConnections)
+
+    stopDefaultAnimations()
+
+    for _, track in pairs(defaultTracks) do
+        if track then
+            pcall(function()
+                track:Destroy()
+            end)
+        end
+    end
+
+    table.clear(defaultTracks)
+end
+
+local function defaultAnimationBlocked(humanoid)
+    if not humanoid or humanoid.Health <= 0 then
+        return true
+    end
+
+    if AnimationState.Controller == "TallV2"
+        or AnimationState.FlyActive
+        or AnimationState.CrouchActive
+        or humanoid.PlatformStand then
+        return true
+    end
+
+    local state = humanoid:GetState()
+
+    return state == Enum.HumanoidStateType.Seated
+        or state == Enum.HumanoidStateType.PlatformStanding
+        or state == Enum.HumanoidStateType.Physics
+        or state == Enum.HumanoidStateType.Dead
+        or state == Enum.HumanoidStateType.Swimming
+end
+
+local function playDefaultAnimation(name)
+    local selected = defaultTracks[name]
+
+    if not selected or not defaultHumanoid then
+        return
+    end
+
+    if defaultAnimationBlocked(defaultHumanoid) then
+        stopDefaultAnimations()
+        return
+    end
+
+    for otherName, track in pairs(defaultTracks) do
+        if otherName ~= name and track and track.IsPlaying then
+            track:Stop(0.12)
+        end
+    end
+
+    if not selected.IsPlaying then
+        selected:Play(0.12)
+    end
+end
+
+local function updateDefaultMovement(speed)
+    local humanoid = defaultHumanoid
+
+    if defaultAnimationBlocked(humanoid) then
+        stopDefaultAnimations()
+        return
+    end
+
+    if speed <= 0.5 then
+        playDefaultAnimation("idle")
+    elseif speed <= DEFAULT_RUN_THRESHOLD then
+        playDefaultAnimation("walk")
+    else
+        playDefaultAnimation("run")
+    end
+end
+
+local function loadDefaultTrack(animator, name, id, priority, looped)
+    local animation = Instance.new("Animation")
+    animation.AnimationId = id
+
+    local success, track = pcall(function()
+        return animator:LoadAnimation(animation)
+    end)
+
+    animation:Destroy()
+
+    if not success or not track then
+        warn("[Z-GUI Animation] Cannot load:", name)
+        return nil
+    end
+
+    track.Priority = priority
+    track.Looped = looped
+
+    return track
+end
+
+local function applyDefaultAnimations(character)
+    cleanupDefaultAnimations()
+
+    defaultCharacter = character
+
+    local humanoid = character:WaitForChild("Humanoid")
+
+    if humanoid.RigType ~= Enum.HumanoidRigType.R15 then
+        warn("[Z-GUI Animation] R15 only.")
+        return
+    end
+
+    local animator = humanoid:WaitForChild("Animator")
+    defaultHumanoid = humanoid
+
+    defaultTracks.idle = loadDefaultTrack(
+        animator, "idle", DEFAULT_ANIMATIONS.idle,
+        Enum.AnimationPriority.Movement, true
+    )
+
+    defaultTracks.walk = loadDefaultTrack(
+        animator, "walk", DEFAULT_ANIMATIONS.walk,
+        Enum.AnimationPriority.Movement, true
+    )
+
+    defaultTracks.run = loadDefaultTrack(
+        animator, "run", DEFAULT_ANIMATIONS.run,
+        Enum.AnimationPriority.Movement, true
+    )
+
+    defaultTracks.jump = loadDefaultTrack(
+        animator, "jump", DEFAULT_ANIMATIONS.jump,
+        Enum.AnimationPriority.Action, false
+    )
+
+    defaultTracks.fall = loadDefaultTrack(
+        animator, "fall", DEFAULT_ANIMATIONS.fall,
+        Enum.AnimationPriority.Movement, true
+    )
+
+    defaultTracks.climb = loadDefaultTrack(
+        animator, "climb", DEFAULT_ANIMATIONS.climb,
+        Enum.AnimationPriority.Movement, true
+    )
+
+    defaultConnections.running = humanoid.Running:Connect(
+        updateDefaultMovement
+    )
+
+    defaultConnections.state = humanoid.StateChanged:Connect(function(_, newState)
+        if defaultAnimationBlocked(humanoid) then
+            stopDefaultAnimations()
+            return
+        end
+
+        if newState == Enum.HumanoidStateType.Jumping then
+            playDefaultAnimation("jump")
+
+        elseif newState == Enum.HumanoidStateType.Freefall then
+            playDefaultAnimation("fall")
+
+        elseif newState == Enum.HumanoidStateType.Climbing then
+            playDefaultAnimation("climb")
+
+        else
+            task.defer(function()
+                if defaultHumanoid ~= humanoid or not humanoid.Parent then
+                    return
+                end
+
+                local root = character:FindFirstChild("HumanoidRootPart")
+                local speed = 0
+
+                if root then
+                    local velocity = root.AssemblyLinearVelocity
+                    speed = Vector3.new(velocity.X, 0, velocity.Z).Magnitude
+                end
+
+                updateDefaultMovement(speed)
+            end)
+        end
+    end)
+
+    defaultConnections.platformStand =
+        humanoid:GetPropertyChangedSignal("PlatformStand"):Connect(function()
+            if humanoid.PlatformStand then
+                stopDefaultAnimations()
+            else
+                task.defer(function()
+                    if defaultHumanoid == humanoid then
+                        updateDefaultMovement(humanoid.MoveDirection.Magnitude * humanoid.WalkSpeed)
+                    end
+                end)
+            end
+        end)
+
+    defaultConnections.sharedState = RunService.Heartbeat:Connect(function()
+        if defaultHumanoid ~= humanoid then
+            return
+        end
+
+        if defaultAnimationBlocked(humanoid) then
+            stopDefaultAnimations()
+        end
+    end)
+
+    updateDefaultMovement(0)
+end
+
+-- Prevent duplicate default controller
+if sharedEnv.ZGuiDefaultAnimationCleanup then
+    pcall(sharedEnv.ZGuiDefaultAnimationCleanup)
+end
+
+sharedEnv.ZGuiDefaultAnimationCleanup = cleanupDefaultAnimations
+
+if LocalPlayer.Character then
+    task.spawn(applyDefaultAnimations, LocalPlayer.Character)
+end
+
+defaultConnections.character = LocalPlayer.CharacterAdded:Connect(function(character)
+    task.spawn(applyDefaultAnimations, character)
 end)
 
 -- ==================== MAIN UI ====================
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+
 if PlayerGui:FindFirstChild("ZGuiUI") then
     PlayerGui.ZGuiUI:Destroy()
 end
 
 local ScreenGui = Instance.new("ScreenGui", PlayerGui)
-ScreenGui.Name, ScreenGui.ResetOnSpawn = "ZGuiUI", false
+ScreenGui.Name = "ZGuiUI"
+ScreenGui.ResetOnSpawn = false
 
 -- Nút mở/đóng Menu + Avatar
 local ToggleBtn = Instance.new("ImageButton", ScreenGui)
-ToggleBtn.Size, ToggleBtn.Position, ToggleBtn.BackgroundColor3 =
-    UDim2.new(0, 48, 0, 48),
-    UDim2.new(0, 10, 0.5, -24),
-    Color3.fromRGB(15, 18, 25)
+ToggleBtn.Size = UDim2.new(0, 48, 0, 48)
+ToggleBtn.Position = UDim2.new(0, 10, 0.5, -24)
+ToggleBtn.BackgroundColor3 = Color3.fromRGB(15, 18, 25)
 ToggleBtn.ClipsDescendants = true
+
 Instance.new("UICorner", ToggleBtn).CornerRadius = UDim.new(0, 10)
 
 local ToggleStroke = Instance.new("UIStroke", ToggleBtn)
-ToggleStroke.Color, ToggleStroke.Thickness = Color3.fromRGB(255, 130, 0), 2.5
+ToggleStroke.Color = Color3.fromRGB(255, 130, 0)
+ToggleStroke.Thickness = 2.5
 
 task.spawn(function()
     local succ, img = pcall(function()
@@ -77,34 +364,29 @@ task.spawn(function()
         )
     end)
 
-    if succ and img then
-        ToggleBtn.Image = img
-    else
-        ToggleBtn.Image = "rbxassetid://10952110292"
-    end
+    ToggleBtn.Image = succ and img or "rbxassetid://10952110292"
 end)
 
 local MainFrame = Instance.new("Frame", ScreenGui)
-MainFrame.Size, MainFrame.Position, MainFrame.BackgroundColor3, MainFrame.Visible =
-    UDim2.new(0, 260, 0, 470),
-    UDim2.new(0.5, -130, 0.4, -235),
-    Color3.fromRGB(12, 14, 18),
-    false
+MainFrame.Size = UDim2.new(0, 260, 0, 470)
+MainFrame.Position = UDim2.new(0.5, -130, 0.4, -235)
+MainFrame.BackgroundColor3 = Color3.fromRGB(12, 14, 18)
+MainFrame.Visible = false
 
 Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0, 12)
 
 local MenuStroke = Instance.new("UIStroke", MainFrame)
-MenuStroke.Color, MenuStroke.Thickness = Color3.fromRGB(255, 130, 0), 2
+MenuStroke.Color = Color3.fromRGB(255, 130, 0)
+MenuStroke.Thickness = 2
 
 local TitleBar = Instance.new("TextLabel", MainFrame)
-TitleBar.Size, TitleBar.BackgroundColor3, TitleBar.TextColor3, TitleBar.Text =
-    UDim2.new(1, 0, 0, 35),
-    Color3.fromRGB(18, 21, 28),
-    Color3.fromRGB(255, 140, 0),
-    "  Z-GUI v2.86"
-
-TitleBar.Font, TitleBar.TextSize, TitleBar.TextXAlignment =
-    Enum.Font.GothamBold, 14, Enum.TextXAlignment.Left
+TitleBar.Size = UDim2.new(1, 0, 0, 35)
+TitleBar.BackgroundColor3 = Color3.fromRGB(18, 21, 28)
+TitleBar.TextColor3 = Color3.fromRGB(255, 140, 0)
+TitleBar.Text = "  Z-GUI v2.86"
+TitleBar.Font = Enum.Font.GothamBold
+TitleBar.TextSize = 14
+TitleBar.TextXAlignment = Enum.TextXAlignment.Left
 
 Instance.new("UICorner", TitleBar).CornerRadius = UDim.new(0, 12)
 
@@ -114,38 +396,36 @@ end)
 
 -- STATS BAR
 local StatsBar = Instance.new("Frame", MainFrame)
-StatsBar.Size, StatsBar.Position, StatsBar.BackgroundColor3 =
-    UDim2.new(1, -16, 0, 24),
-    UDim2.new(0, 8, 0, 38),
-    Color3.fromRGB(15, 18, 24)
+StatsBar.Size = UDim2.new(1, -16, 0, 24)
+StatsBar.Position = UDim2.new(0, 8, 0, 38)
+StatsBar.BackgroundColor3 = Color3.fromRGB(15, 18, 24)
 
 Instance.new("UICorner", StatsBar).CornerRadius = UDim.new(0, 6)
 
 local FpsLabel = Instance.new("TextLabel", StatsBar)
-FpsLabel.Size, FpsLabel.BackgroundTransparency, FpsLabel.Font, FpsLabel.TextSize, FpsLabel.Text =
-    UDim2.new(0.33, 0, 1, 0), true, Enum.Font.GothamBold, 10, "FPS: 60"
+FpsLabel.Size = UDim2.new(0.33, 0, 1, 0)
+FpsLabel.BackgroundTransparency = 1
+FpsLabel.Font = Enum.Font.GothamBold
+FpsLabel.TextSize = 10
+FpsLabel.Text = "FPS: 60"
 
 local PingLabel = Instance.new("TextLabel", StatsBar)
-PingLabel.Size, PingLabel.Position, PingLabel.BackgroundTransparency,
-    PingLabel.Font, PingLabel.TextSize, PingLabel.TextColor3, PingLabel.Text =
-    UDim2.new(0.33, 0, 1, 0),
-    UDim2.new(0.33, 0, 0, 0),
-    true,
-    Enum.Font.GothamBold,
-    10,
-    Color3.fromRGB(0, 255, 120),
-    "Ping: 0ms"
+PingLabel.Size = UDim2.new(0.33, 0, 1, 0)
+PingLabel.Position = UDim2.new(0.33, 0, 0, 0)
+PingLabel.BackgroundTransparency = 1
+PingLabel.Font = Enum.Font.GothamBold
+PingLabel.TextSize = 10
+PingLabel.TextColor3 = Color3.fromRGB(0, 255, 120)
+PingLabel.Text = "Ping: 0ms"
 
 local TimeLabel = Instance.new("TextLabel", StatsBar)
-TimeLabel.Size, TimeLabel.Position, TimeLabel.BackgroundTransparency,
-    TimeLabel.Font, TimeLabel.TextSize, TimeLabel.TextColor3, TimeLabel.Text =
-    UDim2.new(0.34, 0, 1, 0),
-    UDim2.new(0.66, 0, 0, 0),
-    true,
-    Enum.Font.GothamBold,
-    10,
-    Color3.fromRGB(255, 255, 255),
-    "00:00:00"
+TimeLabel.Size = UDim2.new(0.34, 0, 1, 0)
+TimeLabel.Position = UDim2.new(0.66, 0, 0, 0)
+TimeLabel.BackgroundTransparency = 1
+TimeLabel.Font = Enum.Font.GothamBold
+TimeLabel.TextSize = 10
+TimeLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+TimeLabel.Text = "00:00:00"
 
 local lastTick, frameCount, currentFps = tick(), 0, 60
 
@@ -159,8 +439,11 @@ RunService.RenderStepped:Connect(function()
     end
 
     local currentPing = 0
+
     pcall(function()
-        currentPing = math.floor(Stats.Network.ServerStatsItem["Data Ping"]:GetValue())
+        currentPing = math.floor(
+            Stats.Network.ServerStatsItem["Data Ping"]:GetValue()
+        )
     end)
 
     FpsLabel.TextColor3 =
@@ -179,12 +462,11 @@ RunService.RenderStepped:Connect(function()
     TimeLabel.Text = os.date("%H:%M:%S")
 end)
 
--- TAB BAR & MÀU TAB
+-- TAB BAR
 local TabBar = Instance.new("Frame", MainFrame)
-TabBar.Size, TabBar.Position, TabBar.BackgroundColor3 =
-    UDim2.new(1, -16, 0, 28),
-    UDim2.new(0, 8, 0, 66),
-    Color3.fromRGB(16, 19, 25)
+TabBar.Size = UDim2.new(1, -16, 0, 28)
+TabBar.Position = UDim2.new(0, 8, 0, 66)
+TabBar.BackgroundColor3 = Color3.fromRGB(16, 19, 25)
 
 Instance.new("UICorner", TabBar).CornerRadius = UDim.new(0, 8)
 
@@ -193,451 +475,153 @@ local INACTIVE_TAB_COLOR = Color3.fromRGB(25, 28, 38)
 local ACTIVE_TEXT_COLOR = Color3.fromRGB(255, 255, 255)
 local INACTIVE_TEXT_COLOR = Color3.fromRGB(150, 150, 160)
 
-local function makeTab(name, pos, w, act)
-    local b = Instance.new("TextButton", TabBar)
-    b.Size, b.Position, b.BackgroundColor3, b.TextColor3, b.Text, b.Font, b.TextSize =
-        w,
-        pos,
-        act and ACTIVE_TAB_COLOR or INACTIVE_TAB_COLOR,
-        act and ACTIVE_TEXT_COLOR or INACTIVE_TEXT_COLOR,
-        name,
-        Enum.Font.GothamBold,
-        10
+local function makeTab(name, pos, width, active)
+    local button = Instance.new("TextButton", TabBar)
+    button.Size = width
+    button.Position = pos
+    button.BackgroundColor3 = active and ACTIVE_TAB_COLOR or INACTIVE_TAB_COLOR
+    button.TextColor3 = active and ACTIVE_TEXT_COLOR or INACTIVE_TEXT_COLOR
+    button.Text = name
+    button.Font = Enum.Font.GothamBold
+    button.TextSize = 10
 
-    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 8)
-    return b
+    Instance.new("UICorner", button).CornerRadius = UDim.new(0, 8)
+
+    return button
 end
 
-local Tab1Btn = makeTab("🏡 Main", UDim2.new(0, 0, 0, 0), UDim2.new(0.33, -2, 1, 0), true)
-local Tab2Btn = makeTab("🏗 Tối ưu", UDim2.new(0.33, 1, 0, 0), UDim2.new(0.33, -2, 1, 0), false)
-local Tab3Btn = makeTab("🧱 Troll+Script", UDim2.new(0.66, 2, 0, 0), UDim2.new(0.34, -2, 1, 0), false)
+local Tab1Btn = makeTab(
+    "🏡 Main",
+    UDim2.new(0, 0, 0, 0),
+    UDim2.new(0.33, -2, 1, 0),
+    true
+)
 
-local function makeContent(vis, sz)
-    local f = Instance.new("ScrollingFrame", MainFrame)
-    f.Size, f.Position, f.BackgroundTransparency, f.BorderSizePixel,
-        f.CanvasSize, f.ScrollBarThickness, f.Visible =
-        UDim2.new(1, -10, 1, -155),
-        UDim2.new(0, 5, 0, 98),
-        true,
-        0,
-        sz,
-        3,
-        vis
+local Tab2Btn = makeTab(
+    "🏗 Tối ưu",
+    UDim2.new(0.33, 1, 0, 0),
+    UDim2.new(0.33, -2, 1, 0),
+    false
+)
 
-    local l = Instance.new("UIListLayout", f)
-    l.Padding, l.HorizontalAlignment, l.SortOrder =
-        UDim.new(0, 6), Enum.HorizontalAlignment.Center, Enum.SortOrder.LayoutOrder
+local Tab3Btn = makeTab(
+    "🧱 Troll+Script",
+    UDim2.new(0.66, 2, 0, 0),
+    UDim2.new(0.34, -2, 1, 0),
+    false
+)
 
-    Instance.new("UIPadding", f).PaddingTop = UDim.new(0, 5)
-    return f
+local function makeContent(visible, size)
+    local frame = Instance.new("ScrollingFrame", MainFrame)
+    frame.Size = UDim2.new(1, -10, 1, -155)
+    frame.Position = UDim2.new(0, 5, 0, 98)
+    frame.BackgroundTransparency = 1
+    frame.BorderSizePixel = 0
+    frame.CanvasSize = size
+    frame.ScrollBarThickness = 3
+    frame.Visible = visible
+
+    local layout = Instance.new("UIListLayout", frame)
+    layout.Padding = UDim.new(0, 6)
+    layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+    layout.SortOrder = Enum.SortOrder.LayoutOrder
+
+    Instance.new("UIPadding", frame).PaddingTop = UDim.new(0, 5)
+
+    return frame
 end
 
-local Tab1C, Tab2C, Tab3C =
-    makeContent(true, UDim2.new(0, 0, 0, 520)),
-    makeContent(false, UDim2.new(0, 0, 0, 500)),
-    makeContent(false, UDim2.new(0, 0, 0, 500))
+local Tab1C = makeContent(true, UDim2.new(0, 0, 0, 520))
+local Tab2C = makeContent(false, UDim2.new(0, 0, 0, 500))
+local Tab3C = makeContent(false, UDim2.new(0, 0, 0, 500))
 
-local function setTabActive(activeBtn, activeContent)
-    Tab1C.Visible, Tab2C.Visible, Tab3C.Visible = false, false, false
+local function setTabActive(activeButton, activeContent)
+    Tab1C.Visible = false
+    Tab2C.Visible = false
+    Tab3C.Visible = false
 
-    Tab1Btn.BackgroundColor3, Tab1Btn.TextColor3 = INACTIVE_TAB_COLOR, INACTIVE_TEXT_COLOR
-    Tab2Btn.BackgroundColor3, Tab2Btn.TextColor3 = INACTIVE_TAB_COLOR, INACTIVE_TEXT_COLOR
-    Tab3Btn.BackgroundColor3, Tab3Btn.TextColor3 = INACTIVE_TAB_COLOR, INACTIVE_TEXT_COLOR
+    Tab1Btn.BackgroundColor3 = INACTIVE_TAB_COLOR
+    Tab1Btn.TextColor3 = INACTIVE_TEXT_COLOR
+    Tab2Btn.BackgroundColor3 = INACTIVE_TAB_COLOR
+    Tab2Btn.TextColor3 = INACTIVE_TEXT_COLOR
+    Tab3Btn.BackgroundColor3 = INACTIVE_TAB_COLOR
+    Tab3Btn.TextColor3 = INACTIVE_TEXT_COLOR
 
     activeContent.Visible = true
-    activeBtn.BackgroundColor3 = ACTIVE_TAB_COLOR
-    activeBtn.TextColor3 = ACTIVE_TEXT_COLOR
+    activeButton.BackgroundColor3 = ACTIVE_TAB_COLOR
+    activeButton.TextColor3 = ACTIVE_TEXT_COLOR
 end
 
-Tab1Btn.MouseButton1Click:Connect(function() setTabActive(Tab1Btn, Tab1C) end)
-Tab2Btn.MouseButton1Click:Connect(function() setTabActive(Tab2Btn, Tab2C) end)
-Tab3Btn.MouseButton1Click:Connect(function() setTabActive(Tab3Btn, Tab3C) end)
-
-local function makeToggle(p, text, order, cb)
-    local b = Instance.new("TextButton", p)
-    b.Size, b.BackgroundColor3, b.TextColor3, b.Text, b.Font, b.TextSize,
-        b.TextXAlignment, b.LayoutOrder =
-        UDim2.new(0, 230, 0, 30),
-        Color3.fromRGB(20, 22, 28),
-        Color3.fromRGB(255, 255, 255),
-        "  " .. text .. ": OFF",
-        Enum.Font.GothamMedium,
-        11,
-        Enum.TextXAlignment.Left,
-        order
-
-    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 8)
-
-    local act = false
-    b.MouseButton1Click:Connect(function()
-        act = not act
-        b.Text = "  " .. text .. ": " .. (act and "ON" or "OFF")
-        b.TextColor3 = act and Color3.fromRGB(100, 255, 150) or Color3.fromRGB(255, 255, 255)
-        if cb then cb(act) end
-    end)
-
-    return b
-end
-
-local function makeAction(p, text, order, cb)
-    local b = Instance.new("TextButton", p)
-    b.Size, b.BackgroundColor3, b.TextColor3, b.Text, b.Font, b.TextSize, b.LayoutOrder =
-        UDim2.new(0, 230, 0, 30),
-        Color3.fromRGB(20, 22, 28),
-        Color3.fromRGB(255, 140, 0),
-        text,
-        Enum.Font.GothamBold,
-        11,
-        order
-
-    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 8)
-    b.MouseButton1Click:Connect(function()
-        if cb then cb() end
-    end)
-
-    return b
-end
-
--- ==================== ANIMATION CONTROLLER ====================
--- Z-GUI mặc định dùng bộ animation V3.
--- Tall v2 đổi sang bộ animation V4 khi bật.
-
-local DEFAULT_ANIMATIONS = {
-    idle = "rbxassetid://110939321724226",
-    walk = "rbxassetid://102031415992902",
-    run = "rbxassetid://105492432746214",
-    jump = "rbxassetid://123814879688543",
-    fall = "rbxassetid://132358096834201",
-    climb = "rbxassetid://74422682039842"
-}
-
-local TALL_ANIMATIONS = {
-    idle = "rbxassetid://126434942381136",
-    walk = "rbxassetid://89394284567845",
-    run = "rbxassetid://86307113372364",
-    jump = "rbxassetid://79132772327147",
-    fall = "rbxassetid://130110574826958",
-    climb = "rbxassetid://74422682039842"
-}
-
-local TALL_WALK_SPEED = 34
-local TALL_JUMP_POWER = 75
-local TALL_JUMP_HEIGHT = 7.2
-local ANIMATION_RUN_THRESHOLD = 16
-
-local tallV2Enabled = false
-local animationTracks = {}
-local animationConnections = {}
-local animationHumanoid = nil
-local animationCharacter = nil
-local savedTallMovement = nil
-
-local function stopAnimationTracks()
-    for _, track in pairs(animationTracks) do
-        if track then
-            pcall(function()
-                track:Stop(0.12)
-                track:Destroy()
-            end)
-        end
-    end
-
-    table.clear(animationTracks)
-end
-
-local function cleanupAnimationController()
-    for _, connection in pairs(animationConnections) do
-        if connection then
-            connection:Disconnect()
-        end
-    end
-
-    table.clear(animationConnections)
-    stopAnimationTracks()
-end
-
-local function loadCustomAnimation(animator, animationId, looped)
-    local animation = Instance.new("Animation")
-    animation.AnimationId = animationId
-
-    local success, track = pcall(function()
-        return animator:LoadAnimation(animation)
-    end)
-
-    animation:Destroy()
-
-    if not success then
-        warn("[Z-GUI Animation] Không thể tải animation:", animationId, track)
-        return nil
-    end
-
-    track.Priority = Enum.AnimationPriority.Action2
-    track.Looped = looped
-
-    return track
-end
-
-local function playCustomAnimation(name)
-    local selected = animationTracks[name]
-    if not selected then return end
-
-    for otherName, otherTrack in pairs(animationTracks) do
-        if otherName ~= name and otherTrack and otherTrack.IsPlaying then
-            otherTrack:Stop(0.12)
-        end
-    end
-
-    if not selected.IsPlaying then
-        selected:Play(0.12)
-    end
-end
-
-local function stopCustomAnimations()
-    for _, track in pairs(animationTracks) do
-        if track and track.IsPlaying then
-            track:Stop(0.12)
-        end
-    end
-end
-
-local function updateCustomMovement(speedValue)
-    local humanoid = animationHumanoid
-
-    if not humanoid or not humanoid.Parent or humanoid.Health <= 0 then
-        stopCustomAnimations()
-        return
-    end
-
-    local state = humanoid:GetState()
-
-    if state == Enum.HumanoidStateType.Jumping
-        or state == Enum.HumanoidStateType.Freefall
-        or state == Enum.HumanoidStateType.Climbing
-        or state == Enum.HumanoidStateType.Swimming
-        or state == Enum.HumanoidStateType.Seated
-        or state == Enum.HumanoidStateType.Dead then
-        return
-    end
-
-    if speedValue <= 0.5 then
-        playCustomAnimation("idle")
-    elseif speedValue <= ANIMATION_RUN_THRESHOLD then
-        playCustomAnimation("walk")
-    else
-        playCustomAnimation("run")
-    end
-end
-
-local function handleCustomHumanoidState(_, newState)
-    if not animationHumanoid then return end
-
-    if newState == Enum.HumanoidStateType.Jumping then
-        playCustomAnimation("jump")
-
-    elseif newState == Enum.HumanoidStateType.Freefall then
-        playCustomAnimation("fall")
-
-    elseif newState == Enum.HumanoidStateType.Climbing then
-        playCustomAnimation("climb")
-
-    elseif newState == Enum.HumanoidStateType.Swimming
-        or newState == Enum.HumanoidStateType.Seated
-        or newState == Enum.HumanoidStateType.Dead then
-        stopCustomAnimations()
-
-    else
-        task.defer(function()
-            if not animationHumanoid or not animationHumanoid.Parent then
-                return
-            end
-
-            if animationHumanoid:GetState() == newState then
-                local root = animationCharacter
-                    and animationCharacter:FindFirstChild("HumanoidRootPart")
-
-                local movementSpeed = 0
-
-                if root then
-                    local velocity = root.AssemblyLinearVelocity
-                    movementSpeed = Vector3.new(
-                        velocity.X,
-                        0,
-                        velocity.Z
-                    ).Magnitude
-                end
-
-                updateCustomMovement(movementSpeed)
-            end
-        end)
-    end
-end
-
-local function saveTallMovement(humanoid)
-    if savedTallMovement and savedTallMovement.humanoid == humanoid then
-        return
-    end
-
-    savedTallMovement = {
-        humanoid = humanoid,
-        WalkSpeed = humanoid.WalkSpeed,
-        UseJumpPower = humanoid.UseJumpPower,
-        JumpPower = humanoid.JumpPower,
-        JumpHeight = humanoid.JumpHeight
-    }
-end
-
-local function applyTallMovement(humanoid)
-    if not humanoid then return end
-
-    saveTallMovement(humanoid)
-
-    humanoid.UseJumpPower = true
-    humanoid.WalkSpeed = TALL_WALK_SPEED
-    humanoid.JumpPower = TALL_JUMP_POWER
-    humanoid.JumpHeight = TALL_JUMP_HEIGHT
-
-    if animationConnections.tallMovement then
-        animationConnections.tallMovement:Disconnect()
-    end
-
-    animationConnections.tallMovement =
-        RunService.Heartbeat:Connect(function()
-            if not tallV2Enabled or not humanoid.Parent then
-                return
-            end
-
-            if humanoid.WalkSpeed ~= TALL_WALK_SPEED then
-                humanoid.WalkSpeed = TALL_WALK_SPEED
-            end
-
-            if not humanoid.UseJumpPower then
-                humanoid.UseJumpPower = true
-            end
-
-            if humanoid.JumpPower ~= TALL_JUMP_POWER then
-                humanoid.JumpPower = TALL_JUMP_POWER
-            end
-
-            if humanoid.JumpHeight ~= TALL_JUMP_HEIGHT then
-                humanoid.JumpHeight = TALL_JUMP_HEIGHT
-            end
-        end)
-end
-
-local function restoreTallMovement(humanoid)
-    if animationConnections.tallMovement then
-        animationConnections.tallMovement:Disconnect()
-        animationConnections.tallMovement = nil
-    end
-
-    local saved = savedTallMovement
-
-    if not saved or saved.humanoid ~= humanoid or not humanoid or not humanoid.Parent then
-        savedTallMovement = nil
-        return
-    end
-
-    pcall(function()
-        humanoid.UseJumpPower = saved.UseJumpPower
-        humanoid.WalkSpeed = saved.WalkSpeed
-        humanoid.JumpPower = saved.JumpPower
-        humanoid.JumpHeight = saved.JumpHeight
-    end)
-
-    savedTallMovement = nil
-end
-
-local function applyAnimationSet(character)
-    cleanupAnimationController()
-
-    animationCharacter = character
-
-    local humanoid = character:WaitForChild("Humanoid")
-
-    if humanoid.RigType ~= Enum.HumanoidRigType.R15 then
-        warn("[Z-GUI Animation] Chỉ hỗ trợ R15.")
-        return
-    end
-
-    local animator = humanoid:WaitForChild("Animator")
-    animationHumanoid = humanoid
-
-    if tallV2Enabled then
-        applyTallMovement(humanoid)
-    end
-
-    local selectedSet = tallV2Enabled
-        and TALL_ANIMATIONS
-        or DEFAULT_ANIMATIONS
-
-    animationTracks.idle = loadCustomAnimation(
-        animator, selectedSet.idle, true
-    )
-
-    animationTracks.walk = loadCustomAnimation(
-        animator, selectedSet.walk, true
-    )
-
-    animationTracks.run = loadCustomAnimation(
-        animator, selectedSet.run, true
-    )
-
-    animationTracks.jump = loadCustomAnimation(
-        animator, selectedSet.jump, false
-    )
-
-    animationTracks.fall = loadCustomAnimation(
-        animator, selectedSet.fall, true
-    )
-
-    animationTracks.climb = loadCustomAnimation(
-        animator, selectedSet.climb, true
-    )
-
-    animationConnections.running =
-        humanoid.Running:Connect(updateCustomMovement)
-
-    animationConnections.state =
-        humanoid.StateChanged:Connect(handleCustomHumanoidState)
-
-    updateCustomMovement(0)
-end
-
-local function setTallV2(enabled)
-    tallV2Enabled = enabled
-
-    local character = LocalPlayer.Character
-    if not character then return end
-
-    local humanoid = character:FindFirstChildOfClass("Humanoid")
-
-    if enabled then
-        if humanoid then
-            applyTallMovement(humanoid)
-        end
-    else
-        restoreTallMovement(humanoid)
-    end
-
-    task.spawn(applyAnimationSet, character)
-end
-
--- Chạy animation mặc định ngay khi Z-GUI khởi động.
-if LocalPlayer.Character then
-    task.spawn(applyAnimationSet, LocalPlayer.Character)
-end
-
-LocalPlayer.CharacterAdded:Connect(function(character)
-    savedTallMovement = nil
-    task.spawn(applyAnimationSet, character)
+Tab1Btn.MouseButton1Click:Connect(function()
+    setTabActive(Tab1Btn, Tab1C)
 end)
 
--- ==================== TAB 1 (CHÍNH) ====================
+Tab2Btn.MouseButton1Click:Connect(function()
+    setTabActive(Tab2Btn, Tab2C)
+end)
 
--- 1. GOD MODE (INTEGRATED ON/OFF)
+Tab3Btn.MouseButton1Click:Connect(function()
+    setTabActive(Tab3Btn, Tab3C)
+end)
+
+local function makeToggle(parent, text, order, callback)
+    local button = Instance.new("TextButton", parent)
+    button.Size = UDim2.new(0, 230, 0, 30)
+    button.BackgroundColor3 = Color3.fromRGB(20, 22, 28)
+    button.TextColor3 = Color3.fromRGB(255, 255, 255)
+    button.Text = "  " .. text .. ": OFF"
+    button.Font = Enum.Font.GothamMedium
+    button.TextSize = 11
+    button.TextXAlignment = Enum.TextXAlignment.Left
+    button.LayoutOrder = order
+
+    Instance.new("UICorner", button).CornerRadius = UDim.new(0, 8)
+
+    local active = false
+
+    button.MouseButton1Click:Connect(function()
+        active = not active
+
+        button.Text = "  " .. text .. ": " .. (active and "ON" or "OFF")
+        button.TextColor3 = active
+            and Color3.fromRGB(100, 255, 150)
+            or Color3.fromRGB(255, 255, 255)
+
+        if callback then
+            callback(active)
+        end
+    end)
+
+    return button
+end
+
+local function makeAction(parent, text, order, callback)
+    local button = Instance.new("TextButton", parent)
+    button.Size = UDim2.new(0, 230, 0, 30)
+    button.BackgroundColor3 = Color3.fromRGB(20, 22, 28)
+    button.TextColor3 = Color3.fromRGB(255, 140, 0)
+    button.Text = text
+    button.Font = Enum.Font.GothamBold
+    button.TextSize = 11
+    button.LayoutOrder = order
+
+    Instance.new("UICorner", button).CornerRadius = UDim.new(0, 8)
+
+    button.MouseButton1Click:Connect(function()
+        if callback then
+            callback()
+        end
+    end)
+
+    return button
+end
+
+-- ==================== TAB 1 ====================
+
+-- 1. GOD MODE
 local godModeEnabled = false
-local godHealthConnection = nil
-local godCharacterConnection = nil
+local godHealthConnection
+local godCharacterConnection
 local godDisabledScripts = {}
 
 local function disconnectGodHealth()
@@ -702,9 +686,7 @@ local function enableGodMode()
     if not humanoid then return end
 
     godHealthConnection = humanoid.HealthChanged:Connect(function(health)
-        if not godModeEnabled then return end
-
-        if health < humanoid.MaxHealth then
+        if godModeEnabled and health < humanoid.MaxHealth then
             pcall(function()
                 humanoid.Health = humanoid.MaxHealth
             end)
@@ -722,7 +704,7 @@ local function disableGodMode()
     restoreGodScripts()
 end
 
-godCharacterConnection = LocalPlayer.CharacterAdded:Connect(function(character)
+godCharacterConnection = LocalPlayer.CharacterAdded:Connect(function()
     task.wait(1)
 
     if godModeEnabled then
@@ -730,10 +712,10 @@ godCharacterConnection = LocalPlayer.CharacterAdded:Connect(function(character)
     end
 end)
 
-makeToggle(Tab1C, "🛡️ God Mode", 1, function(st)
-    godModeEnabled = st
+makeToggle(Tab1C, "🛡️ God Mode", 1, function(state)
+    godModeEnabled = state
 
-    if st then
+    if state then
         enableGodMode()
     else
         disableGodMode()
@@ -746,158 +728,212 @@ local MOVE_ANIM_ID = "rbxassetid://132105268936736"
 
 local flySpeed = 80
 local isFlying = false
-local flyConnection = nil
-local flyBodyVel, flyBodyGyro = nil, nil
-local idleTrack, moveTrack = nil, nil
+local flyConnection
+local flyBodyVel, flyBodyGyro
+local idleTrack, moveTrack
 
 local function cleanupFly()
     isFlying = false
+    AnimationState.FlyActive = false
 
-    if flyConnection then flyConnection:Disconnect() flyConnection = nil end
-    if flyBodyVel then flyBodyVel:Destroy() flyBodyVel = nil end
-    if flyBodyGyro then flyBodyGyro:Destroy() flyBodyGyro = nil end
-    if idleTrack then idleTrack:Stop() idleTrack = nil end
-    if moveTrack then moveTrack:Stop() moveTrack = nil end
+    if flyConnection then
+        flyConnection:Disconnect()
+        flyConnection = nil
+    end
 
-    local char = LocalPlayer.Character
-    if char and char:FindFirstChildOfClass("Humanoid") then
-        char:FindFirstChildOfClass("Humanoid").PlatformStand = false
+    if flyBodyVel then
+        flyBodyVel:Destroy()
+        flyBodyVel = nil
+    end
+
+    if flyBodyGyro then
+        flyBodyGyro:Destroy()
+        flyBodyGyro = nil
+    end
+
+    if idleTrack then
+        idleTrack:Stop()
+        idleTrack:Destroy()
+        idleTrack = nil
+    end
+
+    if moveTrack then
+        moveTrack:Stop()
+        moveTrack:Destroy()
+        moveTrack = nil
+    end
+
+    local character = LocalPlayer.Character
+    local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+
+    if humanoid then
+        humanoid.PlatformStand = false
     end
 end
 
-makeToggle(Tab1C, "🐦 Fly Mode", 2, function(st)
-    local char = LocalPlayer.Character
-    if not char or not char:FindFirstChild("HumanoidRootPart")
-        or not char:FindFirstChildOfClass("Humanoid") then
+makeToggle(Tab1C, "🐦 Fly Mode", 2, function(state)
+    local character = LocalPlayer.Character
+    local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+    local root = character and character:FindFirstChild("HumanoidRootPart")
+
+    if not character or not root or not humanoid then
         return
     end
 
-    if not st then
+    if not state then
         cleanupFly()
-    else
-        isFlying = true
-
-        local hrp = char.HumanoidRootPart
-        local hum = char:FindFirstChildOfClass("Humanoid")
-        local camera = Workspace.CurrentCamera
-        local animator = hum:FindFirstChildOfClass("Animator") or hum
-
-        local idleAnim = Instance.new("Animation")
-        idleAnim.AnimationId = IDLE_ANIM_ID
-
-        local moveAnim = Instance.new("Animation")
-        moveAnim.AnimationId = MOVE_ANIM_ID
-
-        idleTrack = animator:LoadAnimation(idleAnim)
-        moveTrack = animator:LoadAnimation(moveAnim)
-
-        flyBodyVel = Instance.new("BodyVelocity")
-        flyBodyVel.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
-        flyBodyVel.Velocity = Vector3.zero
-        flyBodyVel.Parent = hrp
-
-        flyBodyGyro = Instance.new("BodyGyro")
-        flyBodyGyro.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
-        flyBodyGyro.P = 10000
-        flyBodyGyro.CFrame = camera.CFrame
-        flyBodyGyro.Parent = hrp
-
-        hum.PlatformStand = true
-        idleTrack:Play()
-
-        flyConnection = RunService.RenderStepped:Connect(function()
-            if not isFlying or not char or hum.Health <= 0 then
-                cleanupFly()
-                return
-            end
-
-            local moveVector = Vector3.zero
-
-            pcall(function()
-                local controls = require(LocalPlayer.PlayerScripts.PlayerModule):GetControls()
-                moveVector = controls:GetMoveVector()
-            end)
-
-            if moveVector.Magnitude > 0.01 then
-                if not moveTrack.IsPlaying then
-                    idleTrack:Stop()
-                    moveTrack:Play()
-                end
-
-                local camCFrame = camera.CFrame
-                local flyDir =
-                    (camCFrame.RightVector * moveVector.X)
-                    + (camCFrame.LookVector * -moveVector.Z)
-
-                flyBodyVel.Velocity = flyDir * flySpeed
-                flyBodyGyro.CFrame = CFrame.lookAt(hrp.Position, hrp.Position + flyDir)
-            else
-                if not idleTrack.IsPlaying then
-                    moveTrack:Stop()
-                    idleTrack:Play()
-                end
-
-                flyBodyVel.Velocity = Vector3.zero
-                flyBodyGyro.CFrame = camera.CFrame
-            end
-        end)
+        return
     end
+
+    if isFlying then return end
+
+    isFlying = true
+    AnimationState.FlyActive = true
+
+    local camera = Workspace.CurrentCamera
+    local animator = humanoid:FindFirstChildOfClass("Animator") or humanoid
+
+    local idleAnimation = Instance.new("Animation")
+    idleAnimation.AnimationId = IDLE_ANIM_ID
+
+    local moveAnimation = Instance.new("Animation")
+    moveAnimation.AnimationId = MOVE_ANIM_ID
+
+    idleTrack = animator:LoadAnimation(idleAnimation)
+    moveTrack = animator:LoadAnimation(moveAnimation)
+
+    idleAnimation:Destroy()
+    moveAnimation:Destroy()
+
+    idleTrack.Priority = Enum.AnimationPriority.Action
+    moveTrack.Priority = Enum.AnimationPriority.Action
+    idleTrack.Looped = true
+    moveTrack.Looped = true
+
+    flyBodyVel = Instance.new("BodyVelocity")
+    flyBodyVel.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+    flyBodyVel.Velocity = Vector3.zero
+    flyBodyVel.Parent = root
+
+    flyBodyGyro = Instance.new("BodyGyro")
+    flyBodyGyro.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
+    flyBodyGyro.P = 10000
+    flyBodyGyro.CFrame = camera.CFrame
+    flyBodyGyro.Parent = root
+
+    humanoid.PlatformStand = true
+    idleTrack:Play()
+
+    flyConnection = RunService.RenderStepped:Connect(function()
+        if not isFlying or not character.Parent or humanoid.Health <= 0 then
+            cleanupFly()
+            return
+        end
+
+        local moveVector = Vector3.zero
+
+        pcall(function()
+            local controls = require(
+                LocalPlayer.PlayerScripts.PlayerModule
+            ):GetControls()
+
+            moveVector = controls:GetMoveVector()
+        end)
+
+        if moveVector.Magnitude > 0.01 then
+            if not moveTrack.IsPlaying then
+                idleTrack:Stop()
+                moveTrack:Play()
+            end
+
+            local camCFrame = camera.CFrame
+
+            local flyDirection =
+                (camCFrame.RightVector * moveVector.X)
+                + (camCFrame.LookVector * -moveVector.Z)
+
+            flyBodyVel.Velocity = flyDirection * flySpeed
+            flyBodyGyro.CFrame = CFrame.lookAt(
+                root.Position,
+                root.Position + flyDirection
+            )
+        else
+            if not idleTrack.IsPlaying then
+                moveTrack:Stop()
+                idleTrack:Play()
+            end
+
+            flyBodyVel.Velocity = Vector3.zero
+            flyBodyGyro.CFrame = camera.CFrame
+        end
+    end)
 end)
 
 -- 3. NOCLIP
 local noclipActive = false
-local noclipConn = nil
+local noclipConn
 
-makeToggle(Tab1C, "🧱 Noclip", 3, function(st)
-    noclipActive = st
+makeToggle(Tab1C, "🧱 Noclip", 3, function(state)
+    noclipActive = state
 
-    if noclipActive then
+    if state then
+        if noclipConn then
+            noclipConn:Disconnect()
+        end
+
         noclipConn = RunService.Stepped:Connect(function()
             if LocalPlayer.Character then
-                for _, p in pairs(LocalPlayer.Character:GetDescendants()) do
-                    if p:IsA("BasePart") then
-                        p.CanCollide = false
+                for _, part in pairs(LocalPlayer.Character:GetDescendants()) do
+                    if part:IsA("BasePart") then
+                        part.CanCollide = false
                     end
                 end
             end
         end)
-    else
-        if noclipConn then
-            noclipConn:Disconnect()
-            noclipConn = nil
-        end
+    elseif noclipConn then
+        noclipConn:Disconnect()
+        noclipConn = nil
     end
 end)
 
 -- 4. AIR WALK + INF JUMP
 local airW, airBp, airC, jumpC = false, nil, nil, nil
 
-makeToggle(Tab1C, "☁️ Air Walk + InfJump", 4, function(st)
-    airW = st
+makeToggle(Tab1C, "☁️ Air Walk + InfJump", 4, function(state)
+    airW = state
 
     pcall(function()
-        local r = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-        local h = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+        local root = LocalPlayer.Character
+            and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
 
-        if airW and r and h then
+        local humanoid = LocalPlayer.Character
+            and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+
+        if airW and root and humanoid then
             airC = RunService.RenderStepped:Connect(function()
-                if h.FloorMaterial == Enum.Material.Air then
+                if humanoid.FloorMaterial == Enum.Material.Air then
                     if not airBp then
-                        airBp = Instance.new("BodyPosition", r)
+                        airBp = Instance.new("BodyPosition", root)
                         airBp.MaxForce = Vector3.new(0, math.huge, 0)
                         airBp.P = 50000
                     else
-                        airBp.Position = Vector3.new(r.Position.X, airBp.Position.Y, r.Position.Z)
+                        airBp.Position = Vector3.new(
+                            root.Position.X,
+                            airBp.Position.Y,
+                            root.Position.Z
+                        )
                     end
-                else
-                    if airBp then airBp:Destroy() airBp = nil end
+                elseif airBp then
+                    airBp:Destroy()
+                    airBp = nil
                 end
             end)
 
             jumpC = UserInputService.JumpRequest:Connect(function()
-                h:ChangeState(Enum.HumanoidStateType.Jumping)
+                humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+
                 if airBp then
-                    airBp.Position = r.Position + Vector3.new(0, 3.5, 0)
+                    airBp.Position = root.Position + Vector3.new(0, 3.5, 0)
                 end
             end)
         else
@@ -908,10 +944,10 @@ makeToggle(Tab1C, "☁️ Air Walk + InfJump", 4, function(st)
     end)
 end)
 
--- 5. LOW GRAVITY (STABLE ON/OFF)
+-- 5. LOW GRAVITY
 local lowGravityEnabled = false
-local lowGravityConnection = nil
-local originalGravity = nil
+local lowGravityConnection
+local originalGravity
 local LOW_GRAVITY_VALUE = 50
 
 local function enableLowGravity()
@@ -922,9 +958,7 @@ local function enableLowGravity()
     Workspace.Gravity = LOW_GRAVITY_VALUE
 
     lowGravityConnection = RunService.Heartbeat:Connect(function()
-        if not lowGravityEnabled then return end
-
-        if Workspace.Gravity ~= LOW_GRAVITY_VALUE then
+        if lowGravityEnabled and Workspace.Gravity ~= LOW_GRAVITY_VALUE then
             Workspace.Gravity = LOW_GRAVITY_VALUE
         end
     end)
@@ -944,8 +978,8 @@ local function disableLowGravity()
     end
 end
 
-makeToggle(Tab1C, "🌙 Low Gravity", 5, function(st)
-    if st then
+makeToggle(Tab1C, "🌙 Low Gravity", 5, function(state)
+    if state then
         enableLowGravity()
     else
         disableLowGravity()
@@ -954,62 +988,77 @@ end)
 
 -- 6. SWIM MODE
 local swimActive = false
-local swimConn, swimBodyVel, swimBodyGyro = nil, nil, nil
+local swimConn, swimBodyVel, swimBodyGyro
 
-makeToggle(Tab1C, "🏊 Swim Mode", 6, function(st)
-    swimActive = st
+makeToggle(Tab1C, "🏊 Swim Mode", 6, function(state)
+    swimActive = state
 
     pcall(function()
-        local char = LocalPlayer.Character
-        local hrp = char and char:FindFirstChild("HumanoidRootPart")
-        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        local character = LocalPlayer.Character
+        local root = character and character:FindFirstChild("HumanoidRootPart")
+        local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 
-        if swimActive then
-            if hum then hum:ChangeState(Enum.HumanoidStateType.Swimming) end
+        if state then
+            if humanoid then
+                humanoid:ChangeState(Enum.HumanoidStateType.Swimming)
+            end
 
-            if hrp then
+            if root then
                 if swimBodyVel then swimBodyVel:Destroy() end
                 if swimBodyGyro then swimBodyGyro:Destroy() end
 
-                swimBodyVel = Instance.new("BodyVelocity", hrp)
-                swimBodyVel.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+                swimBodyVel = Instance.new("BodyVelocity", root)
+                swimBodyVel.MaxForce = Vector3.new(
+                    math.huge, math.huge, math.huge
+                )
 
-                swimBodyGyro = Instance.new("BodyGyro", hrp)
-                swimBodyGyro.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
+                swimBodyGyro = Instance.new("BodyGyro", root)
+                swimBodyGyro.MaxTorque = Vector3.new(
+                    math.huge, math.huge, math.huge
+                )
                 swimBodyGyro.P = 3000
             end
 
             swimConn = RunService.RenderStepped:Connect(function()
-                if not swimActive or not hrp or not hum then return end
+                if not swimActive or not root or not humanoid then
+                    return
+                end
 
-                hum:ChangeState(Enum.HumanoidStateType.Swimming)
+                humanoid:ChangeState(Enum.HumanoidStateType.Swimming)
 
-                local cam = Workspace.CurrentCamera
-                local m = hum.MoveDirection
+                local camera = Workspace.CurrentCamera
+                local movement = humanoid.MoveDirection
 
                 swimBodyVel.Velocity =
-                    m.Magnitude > 0
-                    and (cam.CFrame:VectorToWorldSpace(cam.CFrame:VectorToObjectSpace(m) * 50))
+                    movement.Magnitude > 0
+                    and camera.CFrame:VectorToWorldSpace(
+                        camera.CFrame:VectorToObjectSpace(movement) * 50
+                    )
                     or Vector3.new(0, 0.1, 0)
 
-                swimBodyGyro.CFrame = cam.CFrame
+                swimBodyGyro.CFrame = camera.CFrame
             end)
         else
             if swimConn then swimConn:Disconnect() swimConn = nil end
             if swimBodyVel then swimBodyVel:Destroy() swimBodyVel = nil end
             if swimBodyGyro then swimBodyGyro:Destroy() swimBodyGyro = nil end
-            if hum then hum:ChangeState(Enum.HumanoidStateType.GettingUp) end
+
+            if humanoid then
+                humanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
+            end
         end
     end)
 end)
 
 makeAction(Tab1C, "💾 Save TP GUI", 7, function()
     pcall(function()
-        loadstring(game:HttpGet('https://raw.githubusercontent.com/0Ben1/fe/main/Tp%20Place%20GUI'))()
+        loadstring(game:HttpGet(
+            "https://raw.githubusercontent.com/0Ben1/fe/main/Tp%20Place%20GUI"
+        ))()
     end)
 end)
 
--- ==================== TAB 2 (TỐI ƯU & ESP & CROUCH SYSTEM) ====================
+-- ==================== TAB 2 ====================
 local FixLagBtn = makeToggle(Tab2C, "FPS Boost (FixLag)", 1)
 local ClearPropsBtn = makeToggle(Tab2C, "Clear Decor/Seats", 2)
 local HidePlayersBtn = makeToggle(Tab2C, "Hide Players", 3)
@@ -1017,79 +1066,90 @@ local FullBrightBtn = makeToggle(Tab2C, "Full Bright", 4)
 
 -- NoclipCam
 local noclipCamActive = false
-local noclipCamConn = nil
+local noclipCamConn
 
-makeToggle(Tab2C, "NoclipCam", 5, function(st)
-    noclipCamActive = st
+makeToggle(Tab2C, "NoclipCam", 5, function(state)
+    noclipCamActive = state
 
     pcall(function()
-        if noclipCamActive then
+        if state then
             noclipCamConn = RunService.RenderStepped:Connect(function()
-                LocalPlayer.DevCameraOcclusionMode = Enum.DevCameraOcclusionMode.Invisicam
+                LocalPlayer.DevCameraOcclusionMode =
+                    Enum.DevCameraOcclusionMode.Invisicam
+
                 LocalPlayer.CameraMinZoomDistance = 0.5
             end)
         else
-            if noclipCamConn then noclipCamConn:Disconnect() noclipCamConn = nil end
-            LocalPlayer.DevCameraOcclusionMode = Enum.DevCameraOcclusionMode.Zoom
+            if noclipCamConn then
+                noclipCamConn:Disconnect()
+                noclipCamConn = nil
+            end
+
+            LocalPlayer.DevCameraOcclusionMode =
+                Enum.DevCameraOcclusionMode.Zoom
         end
     end)
 end)
 
 -- Smart ESP
 local espActive = false
-local espConn = nil
+local espConn
 
 local function updateESP()
-    for _, p in pairs(Players:GetPlayers()) do
-        if p ~= LocalPlayer then
-            local char = p.Character
-            local hrp = char and char:FindFirstChild("HumanoidRootPart")
-            local hum = char and char:FindFirstChildOfClass("Humanoid")
+    for _, player in pairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer then
+            local character = player.Character
+            local root = character and character:FindFirstChild("HumanoidRootPart")
+            local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 
-            if espActive and char and hrp and hum and hum.Health > 0 then
-                local espGui = char:FindFirstChild("ZGuiESP")
+            if espActive and character and root and humanoid and humanoid.Health > 0 then
+                local espGui = character:FindFirstChild("ZGuiESP")
 
                 if not espGui then
-                    espGui = Instance.new("BillboardGui", char)
+                    espGui = Instance.new("BillboardGui", character)
                     espGui.Name = "ZGuiESP"
                     espGui.Size = UDim2.new(0, 120, 0, 50)
                     espGui.StudsOffset = Vector3.new(0, 3.5, 0)
                     espGui.AlwaysOnTop = true
 
-                    local nameLbl = Instance.new("TextLabel", espGui)
-                    nameLbl.Name = "NameLabel"
-                    nameLbl.Size = UDim2.new(1, 0, 0, 22)
-                    nameLbl.BackgroundTransparency = 1
-                    nameLbl.Font = Enum.Font.GothamBold
-                    nameLbl.TextSize = 12
-                    nameLbl.TextStrokeTransparency = 0.5
+                    local nameLabel = Instance.new("TextLabel", espGui)
+                    nameLabel.Name = "NameLabel"
+                    nameLabel.Size = UDim2.new(1, 0, 0, 22)
+                    nameLabel.BackgroundTransparency = 1
+                    nameLabel.Font = Enum.Font.GothamBold
+                    nameLabel.TextSize = 12
+                    nameLabel.TextStrokeTransparency = 0.5
 
-                    local hpBarBg = Instance.new("Frame", espGui)
-                    hpBarBg.Name = "HpBg"
-                    hpBarBg.Size = UDim2.new(0.8, 0, 0, 5)
-                    hpBarBg.Position = UDim2.new(0.1, 0, 0, 24)
-                    hpBarBg.BackgroundColor3 = Color3.fromRGB(40, 100, 40)
-                    hpBarBg.BorderSizePixel = 0
-                    Instance.new("UICorner", hpBarBg).CornerRadius = UDim.new(1, 0)
+                    local hpBackground = Instance.new("Frame", espGui)
+                    hpBackground.Name = "HpBg"
+                    hpBackground.Size = UDim2.new(0.8, 0, 0, 5)
+                    hpBackground.Position = UDim2.new(0.1, 0, 0, 24)
+                    hpBackground.BackgroundColor3 = Color3.fromRGB(40, 100, 40)
+                    hpBackground.BorderSizePixel = 0
 
-                    local hpBar = Instance.new("Frame", hpBarBg)
+                    Instance.new("UICorner", hpBackground).CornerRadius =
+                        UDim.new(1, 0)
+
+                    local hpBar = Instance.new("Frame", hpBackground)
                     hpBar.Name = "HpBar"
                     hpBar.Size = UDim2.new(1, 0, 1, 0)
                     hpBar.BackgroundColor3 = Color3.fromRGB(0, 255, 100)
                     hpBar.BorderSizePixel = 0
-                    Instance.new("UICorner", hpBar).CornerRadius = UDim.new(1, 0)
 
-                    local highlight = Instance.new("Highlight", char)
+                    Instance.new("UICorner", hpBar).CornerRadius =
+                        UDim.new(1, 0)
+
+                    local highlight = Instance.new("Highlight", character)
                     highlight.Name = "ZGuiHighlight"
                     highlight.FillTransparency = 0.5
                 end
 
                 local roleColor = Color3.fromRGB(0, 255, 100)
-                local backpack = p:FindFirstChild("Backpack")
+                local backpack = player:FindFirstChild("Backpack")
                 local hasWeapon = false
 
                 pcall(function()
-                    local tool = char:FindFirstChildOfClass("Tool")
+                    local tool = character:FindFirstChildOfClass("Tool")
 
                     if (tool and (
                         tool.Name:lower():find("knife")
@@ -1110,73 +1170,79 @@ local function updateESP()
 
                 if hasWeapon then
                     roleColor = Color3.fromRGB(255, 50, 50)
-                elseif p.Team then
-                    local tn = p.Team.Name:lower()
+                elseif player.Team then
+                    local teamName = player.Team.Name:lower()
 
-                    if tn:find("murder") or tn:find("killer")
-                        or tn:find("zombie") or tn:find("bad") then
+                    if teamName:find("murder")
+                        or teamName:find("killer")
+                        or teamName:find("zombie")
+                        or teamName:find("bad") then
                         roleColor = Color3.fromRGB(255, 50, 50)
                     end
                 end
 
-                local nameLbl = espGui:FindFirstChild("NameLabel")
+                local nameLabel = espGui:FindFirstChild("NameLabel")
                 local hpBar = espGui:FindFirstChild("HpBg")
                     and espGui.HpBg:FindFirstChild("HpBar")
-                local hl = char:FindFirstChild("ZGuiHighlight")
+                local highlight = character:FindFirstChild("ZGuiHighlight")
 
-                if nameLbl then
-                    nameLbl.Text = p.Name
-                    nameLbl.TextColor3 = roleColor
+                if nameLabel then
+                    nameLabel.Text = player.Name
+                    nameLabel.TextColor3 = roleColor
                 end
 
                 if hpBar then
-                    hpBar.Size = UDim2.new(math.clamp(hum.Health / hum.MaxHealth, 0, 1), 0, 1, 0)
+                    hpBar.Size = UDim2.new(
+                        math.clamp(humanoid.Health / humanoid.MaxHealth, 0, 1),
+                        0, 1, 0
+                    )
                 end
 
-                if hl then
-                    hl.FillColor = roleColor
-                    hl.OutlineColor = roleColor
+                if highlight then
+                    highlight.FillColor = roleColor
+                    highlight.OutlineColor = roleColor
                 end
             else
-                if char and char:FindFirstChild("ZGuiESP") then
-                    char.ZGuiESP:Destroy()
+                if character and character:FindFirstChild("ZGuiESP") then
+                    character.ZGuiESP:Destroy()
                 end
 
-                if char and char:FindFirstChild("ZGuiHighlight") then
-                    char.ZGuiHighlight:Destroy()
+                if character and character:FindFirstChild("ZGuiHighlight") then
+                    character.ZGuiHighlight:Destroy()
                 end
             end
         end
     end
 end
 
-makeToggle(Tab2C, "Smart ESP (Role/HP)", 6, function(st)
-    espActive = st
+makeToggle(Tab2C, "Smart ESP (Role/HP)", 6, function(state)
+    espActive = state
 
-    if espActive then
+    if state then
         espConn = RunService.RenderStepped:Connect(updateESP)
     else
-        if espConn then espConn:Disconnect() espConn = nil end
+        if espConn then
+            espConn:Disconnect()
+            espConn = nil
+        end
 
-        for _, p in pairs(Players:GetPlayers()) do
-            if p.Character then
-                if p.Character:FindFirstChild("ZGuiESP") then
-                    p.Character.ZGuiESP:Destroy()
-                end
+        for _, player in pairs(Players:GetPlayers()) do
+            if player.Character then
+                local esp = player.Character:FindFirstChild("ZGuiESP")
+                local highlight = player.Character:FindFirstChild("ZGuiHighlight")
 
-                if p.Character:FindFirstChild("ZGuiHighlight") then
-                    p.Character.ZGuiHighlight:Destroy()
-                end
+                if esp then esp:Destroy() end
+                if highlight then highlight:Destroy() end
             end
         end
     end
 end)
 
--- SYSTEM CROUCH INTEGRATION (TAB 2)
+-- ==================== CROUCH SYSTEM ====================
 local crouchSystemEnabled = false
-local crouchGui = nil
-local touchControlsFrame = nil
-local crouchButton = nil
+local crouchGui
+local touchControlsFrame
+local crouchButton
 
 local crouchButtonImage = "rbxassetid://109660173469064"
 local crouchButtonActiveImage = "rbxassetid://139705395031155"
@@ -1186,55 +1252,63 @@ local crouchIdleAnimId = "rbxassetid://107078800928182"
 local isCrouching = false
 local defaultWalkSpeed = 16
 local defaultJumpPower = 50
-local idleAnimIdCache, walkAnimIdCache
-local crouchIdleAnimTrack, crouchWalkAnimTrack
+local idleAnimIdCache
+local walkAnimIdCache
+local crouchIdleAnimTrack
+local crouchWalkAnimTrack
 local crouchAnimSpeed = 0.8
 local crouchWalkSpeed = 5
-local crouchHeartbeatConn = nil
-local crouchInputBeganConn, crouchJumpReqConn, crouchInputTypeConn, crouchCharAddedConn
+local crouchHeartbeatConn
+local crouchInputBeganConn
+local crouchJumpReqConn
+local crouchInputTypeConn
+local crouchCharAddedConn
 
 local function updateCrouchButtonVisibility()
     if crouchButton then
         crouchButton.Visible =
             crouchSystemEnabled
-            and (UserInputService:GetLastInputType() == Enum.UserInputType.Touch)
+            and UserInputService:GetLastInputType() == Enum.UserInputType.Touch
     end
 end
 
 local function cacheCrouchAnimations()
-    local char = LocalPlayer.Character
-    if not char then return end
+    local character = LocalPlayer.Character
+    if not character then return end
 
-    local animate = char:FindFirstChild("Animate")
+    local animate = character:FindFirstChild("Animate")
     if not animate then return end
 
     if not idleAnimIdCache then
-        local idleAnim = animate:FindFirstChild("idle")
+        local idle = animate:FindFirstChild("idle")
 
-        if idleAnim then
-            local anim = idleAnim:FindFirstChild("Animation1")
-            if anim then idleAnimIdCache = anim.AnimationId end
+        if idle then
+            local animation = idle:FindFirstChild("Animation1")
+            if animation then
+                idleAnimIdCache = animation.AnimationId
+            end
         end
     end
 
     if not walkAnimIdCache then
-        local walkAnim = animate:FindFirstChild("walk")
+        local walk = animate:FindFirstChild("walk")
 
-        if walkAnim then
-            local anim = walkAnim:FindFirstChild("WalkAnim")
-            if anim then walkAnimIdCache = anim.AnimationId end
+        if walk then
+            local animation = walk:FindFirstChild("WalkAnim")
+            if animation then
+                walkAnimIdCache = animation.AnimationId
+            end
         end
     end
 end
 
 local function deactivateCrouchState()
+    AnimationState.CrouchActive = false
+
     if not isCrouching then return end
 
-    local char = LocalPlayer.Character
-    if not char then return end
-
-    local humanoid = char:FindFirstChildOfClass("Humanoid")
-    if not humanoid then return end
+    local character = LocalPlayer.Character
+    local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 
     isCrouching = false
 
@@ -1242,48 +1316,66 @@ local function deactivateCrouchState()
         crouchButton.Image = crouchButtonImage
     end
 
-    if crouchIdleAnimTrack then crouchIdleAnimTrack:Stop() end
-    if crouchWalkAnimTrack then crouchWalkAnimTrack:Stop() end
+    if crouchIdleAnimTrack then
+        crouchIdleAnimTrack:Stop()
+        crouchIdleAnimTrack:Destroy()
+        crouchIdleAnimTrack = nil
+    end
+
+    if crouchWalkAnimTrack then
+        crouchWalkAnimTrack:Stop()
+        crouchWalkAnimTrack:Destroy()
+        crouchWalkAnimTrack = nil
+    end
+
+    if crouchHeartbeatConn then
+        crouchHeartbeatConn:Disconnect()
+        crouchHeartbeatConn = nil
+    end
+
+    if not humanoid then return end
 
     humanoid.WalkSpeed = defaultWalkSpeed
     humanoid.JumpPower = defaultJumpPower
 
-    local animate = char:FindFirstChild("Animate")
+    local animate = character:FindFirstChild("Animate")
 
     if animate then
         if idleAnimIdCache then
             local idle = animate:FindFirstChild("idle")
+            local animation = idle and idle:FindFirstChild("Animation1")
 
-            if idle then
-                local anim = idle:FindFirstChild("Animation1")
-                if anim then anim.AnimationId = idleAnimIdCache end
+            if animation then
+                animation.AnimationId = idleAnimIdCache
             end
         end
 
         if walkAnimIdCache then
             local walk = animate:FindFirstChild("walk")
+            local animation = walk and walk:FindFirstChild("WalkAnim")
 
-            if walk then
-                local anim = walk:FindFirstChild("WalkAnim")
-                if anim then anim.AnimationId = walkAnimIdCache end
+            if animation then
+                animation.AnimationId = walkAnimIdCache
             end
         end
     end
 
-    local jumpBtn = PlayerGui:FindFirstChild("JumpButton", true)
-    if jumpBtn then jumpBtn.Visible = true end
+    local jumpButton = PlayerGui:FindFirstChild("JumpButton", true)
+    if jumpButton then
+        jumpButton.Visible = true
+    end
 end
 
 local function activateCrouchState()
     if isCrouching then return end
 
-    local char = LocalPlayer.Character
-    if not char then return end
+    local character = LocalPlayer.Character
+    local humanoid = character and character:FindFirstChildOfClass("Humanoid")
 
-    local humanoid = char:FindFirstChildOfClass("Humanoid")
-    if not humanoid then return end
+    if not character or not humanoid then return end
 
     isCrouching = true
+    AnimationState.CrouchActive = true
 
     if crouchButton then
         crouchButton.Image = crouchButtonActiveImage
@@ -1302,6 +1394,16 @@ local function activateCrouchState()
 
     crouchIdleAnimTrack = humanoid:LoadAnimation(idleAnimation)
     crouchWalkAnimTrack = humanoid:LoadAnimation(walkAnimation)
+
+    idleAnimation:Destroy()
+    walkAnimation:Destroy()
+
+    crouchIdleAnimTrack.Priority = Enum.AnimationPriority.Action
+    crouchWalkAnimTrack.Priority = Enum.AnimationPriority.Action
+
+    crouchIdleAnimTrack.Looped = true
+    crouchWalkAnimTrack.Looped = true
+
     crouchWalkAnimTrack:AdjustSpeed(crouchAnimSpeed)
     crouchWalkAnimTrack:Play()
 
@@ -1313,33 +1415,28 @@ local function activateCrouchState()
 
     crouchHeartbeatConn = RunService.Heartbeat:Connect(function()
         if not isCrouching or humanoid.Health <= 0 then
-            if crouchHeartbeatConn then
-                crouchHeartbeatConn:Disconnect()
-            end
             return
         end
 
-        local isMoving = humanoid.MoveDirection.Magnitude > 0
+        humanoid.WalkSpeed = crouchWalkSpeed
 
-        if isMoving then
-            humanoid.WalkSpeed = crouchWalkSpeed
+        local moving = humanoid.MoveDirection.Magnitude > 0
 
-            if crouchWalkAnimTrack and crouchWalkAnimTrack.IsPlaying then
-                crouchWalkAnimTrack:Stop()
+        if moving then
+            if crouchWalkAnimTrack and not crouchWalkAnimTrack.IsPlaying then
+                crouchWalkAnimTrack:Play()
             end
-
-            if crouchIdleAnimTrack and not crouchIdleAnimTrack.IsPlaying then
-                crouchIdleAnimTrack:Play()
-            end
-        else
-            humanoid.WalkSpeed = crouchWalkSpeed
 
             if crouchIdleAnimTrack and crouchIdleAnimTrack.IsPlaying then
                 crouchIdleAnimTrack:Stop()
             end
+        else
+            if crouchIdleAnimTrack and not crouchIdleAnimTrack.IsPlaying then
+                crouchIdleAnimTrack:Play()
+            end
 
-            if crouchWalkAnimTrack and not crouchWalkAnimTrack.IsPlaying then
-                crouchWalkAnimTrack:Play()
+            if crouchWalkAnimTrack and crouchWalkAnimTrack.IsPlaying then
+                crouchWalkAnimTrack:Stop()
             end
         end
 
@@ -1348,8 +1445,10 @@ local function activateCrouchState()
         end
     end)
 
-    local jumpBtn = PlayerGui:FindFirstChild("JumpButton", true)
-    if jumpBtn then jumpBtn.Visible = false end
+    local jumpButton = PlayerGui:FindFirstChild("JumpButton", true)
+    if jumpButton then
+        jumpButton.Visible = false
+    end
 end
 
 local function toggleCrouchState()
@@ -1361,7 +1460,9 @@ local function toggleCrouchState()
 end
 
 local function initCrouchGui()
-    if crouchGui then crouchGui:Destroy() end
+    if crouchGui then
+        crouchGui:Destroy()
+    end
 
     crouchGui = Instance.new("ScreenGui")
     crouchGui.Name = "ZGuiCrouchGui"
@@ -1375,10 +1476,13 @@ local function initCrouchGui()
     local jumpButton = PlayerGui:FindFirstChild("JumpButton", true)
 
     if not jumpButton then
-        for _, obj in ipairs(PlayerGui:GetDescendants()) do
-            if obj:IsA("ImageButton")
-                and (obj.Name == "JumpButton" or string.find(string.lower(obj.Name), "jump")) then
-                jumpButton = obj
+        for _, object in ipairs(PlayerGui:GetDescendants()) do
+            if object:IsA("ImageButton")
+                and (
+                    object.Name == "JumpButton"
+                    or string.find(string.lower(object.Name), "jump")
+                ) then
+                jumpButton = object
                 break
             end
         end
@@ -1406,10 +1510,10 @@ local function initCrouchGui()
     updateCrouchButtonVisibility()
 end
 
-makeToggle(Tab2C, "Crouch Mode 👣 (Bò/Ngồi)", 7, function(st)
-    crouchSystemEnabled = st
+makeToggle(Tab2C, "Crouch Mode 👣 (Bò/Ngồi)", 7, function(state)
+    crouchSystemEnabled = state
 
-    if crouchSystemEnabled then
+    if state then
         initCrouchGui()
 
         if LocalPlayer.Character then
@@ -1419,19 +1523,26 @@ makeToggle(Tab2C, "Crouch Mode 👣 (Bò/Ngồi)", 7, function(st)
         crouchInputBeganConn = UserInputService.InputBegan:Connect(function(input, processed)
             if processed or not crouchSystemEnabled then return end
 
-            if input.KeyCode == Enum.KeyCode.LeftControl or input.KeyCode == Enum.KeyCode.C then
+            if input.KeyCode == Enum.KeyCode.LeftControl
+                or input.KeyCode == Enum.KeyCode.C then
                 toggleCrouchState()
             end
         end)
 
         crouchJumpReqConn = UserInputService.JumpRequest:Connect(function()
-            if crouchSystemEnabled and isCrouching then return end
+            if crouchSystemEnabled and isCrouching then
+                return
+            end
         end)
 
-        crouchInputTypeConn = UserInputService.LastInputTypeChanged:Connect(updateCrouchButtonVisibility)
+        crouchInputTypeConn =
+            UserInputService.LastInputTypeChanged:Connect(
+                updateCrouchButtonVisibility
+            )
 
-        crouchCharAddedConn = LocalPlayer.CharacterAdded:Connect(function(char)
+        crouchCharAddedConn = LocalPlayer.CharacterAdded:Connect(function(character)
             isCrouching = false
+            AnimationState.CrouchActive = false
 
             if crouchButton then
                 crouchButton.Image = crouchButtonImage
@@ -1440,11 +1551,13 @@ makeToggle(Tab2C, "Crouch Mode 👣 (Bò/Ngồi)", 7, function(st)
             idleAnimIdCache = nil
             walkAnimIdCache = nil
 
-            char:WaitForChild("Humanoid")
+            character:WaitForChild("Humanoid")
             cacheCrouchAnimations()
 
-            local jumpBtn = PlayerGui:FindFirstChild("JumpButton", true)
-            if jumpBtn then jumpBtn.Visible = true end
+            local jumpButton = PlayerGui:FindFirstChild("JumpButton", true)
+            if jumpButton then
+                jumpButton.Visible = true
+            end
 
             task.delay(0.5, updateCrouchButtonVisibility)
         end)
@@ -1454,45 +1567,69 @@ makeToggle(Tab2C, "Crouch Mode 👣 (Bò/Ngồi)", 7, function(st)
         if crouchGui then
             crouchGui:Destroy()
             crouchGui = nil
+            crouchButton = nil
         end
 
-        if crouchInputBeganConn then crouchInputBeganConn:Disconnect() end
-        if crouchJumpReqConn then crouchJumpReqConn:Disconnect() end
-        if crouchInputTypeConn then crouchInputTypeConn:Disconnect() end
-        if crouchCharAddedConn then crouchCharAddedConn:Disconnect() end
+        if crouchInputBeganConn then
+            crouchInputBeganConn:Disconnect()
+            crouchInputBeganConn = nil
+        end
+
+        if crouchJumpReqConn then
+            crouchJumpReqConn:Disconnect()
+            crouchJumpReqConn = nil
+        end
+
+        if crouchInputTypeConn then
+            crouchInputTypeConn:Disconnect()
+            crouchInputTypeConn = nil
+        end
+
+        if crouchCharAddedConn then
+            crouchCharAddedConn:Disconnect()
+            crouchCharAddedConn = nil
+        end
     end
 end)
 
--- ==================== TAB 3 (TROLL & SCRIPTS) ====================
+-- ==================== TAB 3 ====================
 makeAction(Tab3C, "👻 Invisible Script", 1, function()
     pcall(function()
-        loadstring(game:HttpGet('https://gist.githubusercontent.com/NTheDrone-come/c9383f688764c2e7dc68676d6ab26e71/raw/8e67c55142a1f5e5500c012e078d949e2b996056/invisible'))()
+        loadstring(game:HttpGet(
+            "https://gist.githubusercontent.com/NTheDrone-come/c9383f688764c2e7dc68676d6ab26e71/raw/8e67c55142a1f5e5500c012e078d949e2b996056/invisible"
+        ))()
     end)
 end)
 
--- FIX CHUẨN KẾT NỐI INFINITE YIELD
 makeAction(Tab3C, "♾️ Infinite Yield", 2, function()
     pcall(function()
-        loadstring(game:HttpGet("https://raw.githubusercontent.com/EdgeIY/infiniteyield/master/source"))()
+        loadstring(game:HttpGet(
+            "https://raw.githubusercontent.com/EdgeIY/infiniteyield/master/source"
+        ))()
     end)
 end)
 
 -- TOUCH FLING
-local flingConnection = nil
+local flingConnection
 
-makeToggle(Tab3C, "💥 Touch Fling", 3, function(st)
-    if st then
-        if flingConnection then flingConnection:Disconnect() end
+makeToggle(Tab3C, "💥 Touch Fling", 3, function(state)
+    if state then
+        if flingConnection then
+            flingConnection:Disconnect()
+        end
 
         flingConnection = RunService.Heartbeat:Connect(function()
             pcall(function()
-                local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+                local root = LocalPlayer.Character
+                    and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
 
-                if hrp then
-                    local v = hrp.Velocity
-                    hrp.Velocity = v * 10000 + Vector3.new(0, 10000, 0)
+                if root then
+                    local velocity = root.Velocity
+                    root.Velocity =
+                        velocity * 10000 + Vector3.new(0, 10000, 0)
+
                     RunService.RenderStepped:Wait()
-                    hrp.Velocity = v
+                    root.Velocity = velocity
                 end
             end)
         end)
@@ -1503,50 +1640,63 @@ makeToggle(Tab3C, "💥 Touch Fling", 3, function(st)
         end
 
         pcall(function()
-            local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+            local root = LocalPlayer.Character
+                and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
 
-            if hrp then
-                hrp.Velocity = Vector3.zero
+            if root then
+                root.Velocity = Vector3.zero
             end
         end)
     end
 end)
 
--- TALL V2 (ON/OFF)
-makeToggle(Tab3C, "📏 Tall v2", 4, function(st)
-    setTallV2(st)
+makeAction(Tab3C, "📏 Tall Script", 4, function()
+    pcall(function()
+        loadstring(game:HttpGet(
+            "https://scriptblox.com/raw/Universal-Script-Tall-246138"
+        ))()
+    end)
 end)
 
 makeAction(Tab3C, "🎯 FE Bring Player", 5, function()
     pcall(function()
-        loadstring(game:HttpGet("https://scriptblox.com/raw/Universal-Script-FE-bring-player-55056"))()
+        loadstring(game:HttpGet(
+            "https://scriptblox.com/raw/Universal-Script-FE-bring-player-55056"
+        ))()
     end)
 end)
 
 makeAction(Tab3C, "☄️ Zero Gravity", 6, function()
     pcall(function()
-        loadstring(game:HttpGet("https://scriptblox.com/raw/Universal-Script-Zero-Gravity-28484"))()
+        loadstring(game:HttpGet(
+            "https://scriptblox.com/raw/Universal-Script-Zero-Gravity-28484"
+        ))()
     end)
 end)
 
 makeAction(Tab3C, "🎵 Mood Script", 7, function()
     pcall(function()
-        loadstring(game:HttpGet('https://raw.githubusercontent.com/Gazer-Ha/Gaze-stuff/refs/heads/main/Mood'))()
+        loadstring(game:HttpGet(
+            "https://raw.githubusercontent.com/Gazer-Ha/Gaze-stuff/refs/heads/main/Mood"
+        ))()
     end)
 end)
 
 makeAction(Tab3C, "🎭 Copy Mimic Script", 8, function()
     pcall(function()
-        loadstring(game:HttpGet("https://raw.githubusercontent.com/ZyroOnTop/CopyMimicScript/refs/heads/main/byZyro"))()
+        loadstring(game:HttpGet(
+            "https://raw.githubusercontent.com/ZyroOnTop/CopyMimicScript/refs/heads/main/byZyro"
+        ))()
     end)
 end)
 
--- ==================== LOGIC PHỤ TRỢ (TAB 2) ====================
+-- ==================== TAB 2 HELPER LOGIC ====================
 local fb = false
 
 FullBrightBtn.MouseButton1Click:Connect(function()
     fb = not fb
-    Lighting.Brightness, Lighting.GlobalShadows = fb and 2 or 1, not fb
+    Lighting.Brightness = fb and 2 or 1
+    Lighting.GlobalShadows = not fb
 end)
 
 local hide = false
@@ -1554,9 +1704,9 @@ local hide = false
 HidePlayersBtn.MouseButton1Click:Connect(function()
     hide = not hide
 
-    for _, p in pairs(Players:GetPlayers()) do
-        if p ~= LocalPlayer and p.Character then
-            for _, part in ipairs(p.Character:GetDescendants()) do
+    for _, player in pairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer and player.Character then
+            for _, part in ipairs(player.Character:GetDescendants()) do
                 if part:IsA("BasePart") or part:IsA("Decal") then
                     part.Transparency = hide and 1 or 0
                 end
@@ -1569,30 +1719,36 @@ local fix = false
 
 FixLagBtn.MouseButton1Click:Connect(function()
     fix = not fix
-    Lighting.GlobalShadows, Lighting.FogEnd = not fix, fix and 9e9 or 100000
 
-    for _, v in pairs(Workspace:GetDescendants()) do
+    Lighting.GlobalShadows = not fix
+    Lighting.FogEnd = fix and 9e9 or 100000
+
+    for _, object in pairs(Workspace:GetDescendants()) do
         pcall(function()
-            if v:IsA("BasePart") then
-                v.Material, v.CastShadow =
-                    fix and Enum.Material.SmoothPlastic or Enum.Material.Plastic,
-                    not fix
+            if object:IsA("BasePart") then
+                object.Material =
+                    fix and Enum.Material.SmoothPlastic
+                    or Enum.Material.Plastic
+
+                object.CastShadow = not fix
             end
         end)
     end
 end)
 
 ClearPropsBtn.MouseButton1Click:Connect(function()
-    for _, v in pairs(Workspace:GetDescendants()) do
+    for _, object in pairs(Workspace:GetDescendants()) do
         pcall(function()
-            if (v:IsA("BasePart") or v:IsA("MeshPart"))
-                and not v:IsDescendantOf(LocalPlayer.Character) then
+            if (object:IsA("BasePart") or object:IsA("MeshPart"))
+                and not object:IsDescendantOf(LocalPlayer.Character) then
 
-                local n = v.Name:lower()
+                local name = object.Name:lower()
 
-                if n:find("chair") or n:find("seat")
-                    or n:find("bench") or n:find("decor") then
-                    v:Destroy()
+                if name:find("chair")
+                    or name:find("seat")
+                    or name:find("bench")
+                    or name:find("decor") then
+                    object:Destroy()
                 end
             end
         end)
