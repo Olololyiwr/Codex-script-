@@ -1,6 +1,6 @@
 --[[
     Z-GUI v2.87
-    DEFAULT ANIMATION JUMP FIX + WALK/RUN 35
+    DEFAULT ANIMATION ON/OFF + JUMP FIX + WALK/RUN 35
     CROUCH ANIMATION DIRECTION FIX
 ]]
 
@@ -279,7 +279,7 @@ local function makeContent(visible, canvasSize)
     return frame
 end
 
-local Tab1C = makeContent(true, UDim2.new(0, 0, 0, 520))
+local Tab1C = makeContent(true, UDim2.new(0, 0, 0, 560))
 local Tab2C = makeContent(false, UDim2.new(0, 0, 0, 500))
 local Tab3C = makeContent(false, UDim2.new(0, 0, 0, 500))
 
@@ -314,12 +314,11 @@ Tab3Btn.MouseButton1Click:Connect(function()
 end)
 
 -- ==================== BUTTON HELPERS ====================
-local function makeToggle(parent, text, order, callback)
+local function makeToggle(parent, text, order, callback, initialState)
     local button = Instance.new("TextButton")
     button.Size = UDim2.new(0, 230, 0, 30)
     button.BackgroundColor3 = Color3.fromRGB(20, 22, 28)
     button.TextColor3 = Color3.fromRGB(255, 255, 255)
-    button.Text = "  " .. text .. ": OFF"
     button.Font = Enum.Font.GothamMedium
     button.TextSize = 11
     button.TextXAlignment = Enum.TextXAlignment.Left
@@ -328,15 +327,20 @@ local function makeToggle(parent, text, order, callback)
 
     Instance.new("UICorner", button).CornerRadius = UDim.new(0, 8)
 
-    local active = false
+    local active = initialState == true
 
-    button.MouseButton1Click:Connect(function()
-        active = not active
-
+    local function updateButton()
         button.Text = "  " .. text .. ": " .. (active and "ON" or "OFF")
         button.TextColor3 = active
             and Color3.fromRGB(100, 255, 150)
             or Color3.fromRGB(255, 255, 255)
+    end
+
+    updateButton()
+
+    button.MouseButton1Click:Connect(function()
+        active = not active
+        updateButton()
 
         if callback then
             local success, err = pcall(callback, active)
@@ -375,7 +379,6 @@ local function makeAction(parent, text, order, callback)
 
     return button
 end
-
 
 -- ==================== ANIMATION CONTROL CORE ====================
 local AnimationControl = {
@@ -455,7 +458,6 @@ local jumpAssistForce = nil
 local jumpAssistAttachment = nil
 local jumpAssistRoot = nil
 
--- Hỗ trợ nhảy nhẹ, không thay đổi trọng lực toàn bản đồ.
 local JUMP_GRAVITY_REDUCTION = 0.12
 
 local function stopDefaultJumpAssist()
@@ -571,6 +573,12 @@ local function setupBaseController(character)
     AnimationControl.Humanoid = nil
     AnimationControl.Animator = nil
 
+    -- Default Animation OFF: không tải track riêng,
+    -- để Roblox Animate điều khiển animation đã trang bị.
+    if not AnimationControl.Enabled then
+        return
+    end
+
     local humanoid = character:WaitForChild("Humanoid", 10)
 
     if not humanoid
@@ -601,12 +609,7 @@ local function setupBaseController(character)
                 animator,
                 animationId,
                 priorities[name],
-                name == "Idle"
-                    or name == "Walk"
-                    or name == "Run"
-                    or name == "Jump"
-                    or name == "Fall"
-                    or name == "Climb"
+                true
             )
         end)
 
@@ -641,8 +644,6 @@ local function setupBaseController(character)
             playBaseAnimation("Jump")
 
         elseif state == Enum.HumanoidStateType.Freefall then
-            -- Chỉ phát Jump khi nhân vật còn đang đi lên.
-            -- Khi vận tốc dọc chuyển sang âm, chuyển sang Fall.
             if root.AssemblyLinearVelocity.Y > 0.5 then
                 playBaseAnimation("Jump")
             else
@@ -730,6 +731,19 @@ end)
 if LocalPlayer.Character then
     task.spawn(setupBaseController, LocalPlayer.Character)
 end
+
+-- ==================== DEFAULT ANIMATION ON/OFF ====================
+makeToggle(Tab1C, "🎞️ Default Animation", 8, function(state)
+    AnimationControl.Enabled = state
+
+    if state then
+        if LocalPlayer.Character then
+            setupBaseController(LocalPlayer.Character)
+        end
+    else
+        clearBaseController()
+    end
+end, true)
 
 -- 1. GOD MODE
 local godModeEnabled = false
@@ -1199,7 +1213,6 @@ makeAction(Tab1C, "💾 Save TP GUI", 7, function()
         "https://raw.githubusercontent.com/0Ben1/fe/main/Tp%20Place%20GUI"
     ))()
 end)
-
 -- ==================== TAB 2 (TỐI ƯU & ESP & CROUCH) ====================
 
 local FixLagBtn = makeToggle(Tab2C, "FPS Boost (FixLag)", 1)
@@ -1847,7 +1860,6 @@ makeToggle(Tab2C, "Crouch Mode 👣 (Bò/Ngồi)", 7, function(state)
         end
     end
 end)
-
 -- ==================== TAB 3 (TROLL & SCRIPTS) ====================
 
 makeAction(Tab3C, "👻 Invisible Script", 1, function()
