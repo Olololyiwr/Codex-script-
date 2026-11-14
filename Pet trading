@@ -278,14 +278,27 @@ local function readObjectText(obj)
     return nil
 end
 
-local function parseCount(text)
+-- FIX: đọc được cả số dạng x250, 250x và số thuần trong
+-- những object có tên Count / Amount / Quantity.
+local function parseCount(text,allowPlain)
     if not text then return nil end
 
-    local cleaned = tostring(text):gsub(",","")
-    local number = cleaned:match("[xX]%s*(%d+)")
-        or cleaned:match("(%d+)%s*[xX]")
+    local cleaned = tostring(text)
+        :gsub(",","")
+        :gsub("%s+","")
 
-    return tonumber(number)
+    local number = cleaned:match("[xX](%d+)")
+        or cleaned:match("(%d+)[xX]")
+
+    if number then
+        return tonumber(number)
+    end
+
+    if allowPlain and cleaned:match("^%d+$") then
+        return tonumber(cleaned)
+    end
+
+    return nil
 end
 
 local function getCount(id)
@@ -294,6 +307,7 @@ local function getCount(id)
     local item = Inventory:FindFirstChild(tostring(id))
     if not item then return 0 end
 
+    -- Ưu tiên các label có tên biểu thị số lượng.
     for _,obj in ipairs(item:GetDescendants()) do
         local lowerName = string.lower(obj.Name)
 
@@ -302,8 +316,10 @@ local function getCount(id)
             or lowerName == "amount"
             or lowerName == "quantity" then
 
-            local number = parseCount(readObjectText(obj))
-            if number then return number end
+            local number = parseCount(readObjectText(obj),true)
+            if number and number >= 0 then
+                return number
+            end
 
             local ok,value = pcall(function()
                 return obj.Value
@@ -322,14 +338,15 @@ local function getCount(id)
         end
     end
 
+    -- Thử đọc số lượng trong các TextLabel khác.
     for _,obj in ipairs(item:GetDescendants()) do
-        local number = parseCount(readObjectText(obj))
+        local number = parseCount(readObjectText(obj),false)
         if number and number > 0 then
             return number
         end
     end
 
-    -- Some inventories represent one pet per UI item.
+    -- Không tìm thấy label số lượng: UI item được xem là 1 pet.
     return 1
 end
 
@@ -353,7 +370,7 @@ local function getPetName(id)
 
         if text and text ~= ""
             and not tonumber(text)
-            and not parseCount(text)
+            and not parseCount(text,false)
             and string.lower(obj.Name) ~= "itemcount" then
             return text
         end
@@ -686,7 +703,7 @@ local function makeActionButton(parent,title,subtitle,callback,category)
         MUTED,10,false
     )
 
-    local arrow = new("TextLabel",{
+    new("TextLabel",{
         Position=UDim2.new(1,-43,.5,-12),
         Size=UDim2.fromOffset(30,24),
         BackgroundTransparency=1,
@@ -747,7 +764,7 @@ local function showMain()
     )
 
     ----------------------------------------------------------------
-    -- AUTO DROP - COLLAPSIBLE + PET DROPDOWN + ULTRA DROP
+    -- AUTO DROP
     ----------------------------------------------------------------
 
     local DropPanel = new("Frame",{
@@ -786,7 +803,6 @@ local function showMain()
 
     local dropExpanded = false
     local dropDropdownOpen = false
-    local dropBusy = false
     local dropQuantity = 1
 
     local DropPetButton = makeButton(
@@ -851,7 +867,7 @@ local function showMain()
         SortOrder=Enum.SortOrder.LayoutOrder
     },DropPetList)
 
-    local DropQuantityLabel = makeLabel(
+    makeLabel(
         DropBody,
         "QUANTITY TO DROP",
         UDim2.new(0,2,0,74),
@@ -930,13 +946,17 @@ local function showMain()
         end
     end
 
+    -- Không ghi đè nội dung khi người dùng đang nhập số lượng.
     local function updateDropCount()
         local count = selectedPetId and getCount(selectedPetId) or 0
         DropCountLabel.Text = "IN INVENTORY: "..count
 
         local maxAmount = math.max(1,count)
         dropQuantity = math.clamp(dropQuantity,1,maxAmount)
-        DropQuantityBox.Text = tostring(dropQuantity)
+
+        if not DropQuantityBox:IsFocused() then
+            DropQuantityBox.Text = tostring(dropQuantity)
+        end
     end
 
     local function setDropQuantity(value)
@@ -984,7 +1004,8 @@ local function showMain()
                     entry.name.."   x"..entry.count,
                     UDim2.new(),
                     UDim2.new(1,-3,0,29),
-                    selectedPetId == tostring(entry.id) and Color3.fromRGB(75,48,30) or CARD,
+                    selectedPetId == tostring(entry.id)
+                        and Color3.fromRGB(75,48,30) or CARD,
                     function()
                         selectDropPet(entry.id,entry.name)
                     end,
@@ -1055,35 +1076,90 @@ local function showMain()
 
     DropStop.Activated:Connect(function()
         dropRunning = false
-        setDropStatus("Stopped")
+        setDropStatus("Stopping...")
     end)
 
+    -- Chờ pet được trang bị.
     local function waitForHeldPet(id,timeout)
-        local deadline = os.clock()+(timeout or 4)
+        local deadline = os.clock()+(timeout or 3)
 
         repeat
             if not dropRunning then return false end
-            if getHeldPet() == tostring(id) then return true end
-            task.wait(.05)
+
+            if getHeldPet() == tostring(id) then
+                return true
+            end
+
+            task.wait(.08)
         until os.clock() >= deadline
 
         return getHeldPet() == tostring(id)
     end
 
-    local function waitForInventoryDecrease(id,before,timeout)
-        local deadline = os.clock()+(timeout or 4)
+    -- Chờ pet biến mất khỏi tay sau khi thả.
+    local function waitForHeldPetRemoval(timeout)
+        local deadline = os.clock()+(timeout or 3)
 
         repeat
             if not dropRunning then return false end
 
-            if getCount(id) < before then
+            if not getHeldPet() then
                 return true
             end
 
-            task.wait(.05)
+            task.wait(.08)
+        until os.clock() >= deadline
+
+        return not getHeldPet()
+    end
+
+    -- Chờ server xác nhận inventory đã giảm.
+    local function waitForInventoryDecrease(id,before,timeout)
+        local deadline = os.clock()+(timeout or 7)
+
+        repeat
+            if not dropRunning then return false end
+
+            local current = getCount(id)
+            if current < before then
+                return true
+            end
+
+            task.wait(.08)
         until os.clock() >= deadline
 
         return getCount(id) < before
+    end
+
+    -- Thử lấy pet lại nếu server chưa trang bị ở lần đầu.
+    local function takePetWithRetry(id)
+        for attempt = 1,3 do
+            if not dropRunning then return false end
+
+            if getHeldPet() == tostring(id) then
+                return true
+            end
+
+            setDropStatus("Taking pet... ("..attempt.."/3)")
+
+            local ok,err = pcall(function()
+                AutoDropRemote:FireServer("TakeTool",tonumber(id))
+            end)
+
+            if not ok then
+                warn("[Pet Hub] TakeTool error:",err)
+            end
+
+            if waitForHeldPet(id,3) then
+                return true
+            end
+
+            if attempt < 3 then
+                task.wait(.35)
+            end
+        end
+
+        return false
     end
 
     DropStart.Activated:Connect(function()
@@ -1123,7 +1199,6 @@ local function showMain()
         dropInitialCount = initial
         dropTarget = amount
         dropRunning = true
-        dropBusy = true
 
         DropStart.Text = "DROPPING..."
         DropStart.BackgroundColor3 = Color3.fromRGB(190,105,35)
@@ -1132,6 +1207,7 @@ local function showMain()
 
         task.spawn(function()
             local lastShown = -1
+            local failedMessage = nil
 
             while dropRunning do
                 local progress = getDropProgress()
@@ -1146,31 +1222,35 @@ local function showMain()
                     break
                 end
 
-                local held = getHeldPet()
-
-                if held and held ~= selectedPetId then
-                    setDropStatus("Another pet is equipped")
+                local remaining = getCount(selectedPetId)
+                if remaining <= 0 then
+                    setDropStatus("No more pets")
                     break
                 end
 
+                local held = getHeldPet()
+
+                if held and held ~= selectedPetId then
+                    failedMessage = "Another pet is equipped"
+                    break
+                end
+
+                -- Nếu chưa cầm pet, thử lấy pet tối đa 3 lần.
                 if not held then
-                    if getCount(selectedPetId) <= 0 then
-                        setDropStatus("No more pets")
-                        break
-                    end
+                    local taken = takePetWithRetry(selectedPetId)
 
-                    AutoDropRemote:FireServer(
-                        "TakeTool",
-                        tonumber(selectedPetId)
-                    )
-
-                    if not waitForHeldPet(selectedPetId,4) then
+                    if not taken then
                         if dropRunning then
-                            setDropStatus("Take pet timeout")
+                            failedMessage = "Take pet failed - retry later"
                         end
                         break
                     end
-                else
+                end
+
+                if not dropRunning then break end
+
+                -- Chỉ gửi Drop khi đang cầm đúng pet.
+                if getHeldPet() == selectedPetId then
                     local before = getCount(selectedPetId)
 
                     if before <= 0 then
@@ -1178,29 +1258,57 @@ local function showMain()
                         break
                     end
 
-                    AutoDropRemote:FireServer("Drop")
+                    setDropStatus("Dropping "..(progress+1).."/"..dropTarget)
 
-                    -- Wait for the server-confirmed inventory change.
-                    -- No repeated Drop request while the previous one is pending.
-                    if not waitForInventoryDecrease(selectedPetId,before,4) then
+                    local dropOK,dropError = pcall(function()
+                        AutoDropRemote:FireServer("Drop")
+                    end)
+
+                    if not dropOK then
+                        failedMessage = "Drop error: "..tostring(dropError)
+                        break
+                    end
+
+                    -- Đợi inventory giảm trước khi làm lượt tiếp theo.
+                    local inventoryChanged = waitForInventoryDecrease(
+                        selectedPetId,
+                        before,
+                        7
+                    )
+
+                    if not inventoryChanged then
                         if dropRunning then
-                            setDropStatus("Server did not confirm drop")
+                            failedMessage = "Server did not confirm drop"
                         end
                         break
                     end
+
+                    -- Đợi pet rời khỏi tay rồi mới lấy pet kế tiếp.
+                    if not waitForHeldPetRemoval(3) then
+                        if dropRunning then
+                            failedMessage = "Pet still equipped - waiting failed"
+                        end
+                        break
+                    end
+
+                    -- Nhường một nhịp ngắn để server/UI cập nhật ổn định.
+                    task.wait(.12)
+                else
+                    task.wait(.08)
                 end
             end
 
             local completed = getDropProgress() >= dropTarget
 
             dropRunning = false
-            dropBusy = false
 
             DropStart.Text = "ULTRA DROP"
             DropStart.BackgroundColor3 = ORANGE
 
             if completed then
                 setDropStatus("Completed!")
+            elseif failedMessage then
+                setDropStatus(failedMessage)
             elseif DropStatus.Text == "ULTRA DROP running" then
                 setDropStatus("Stopped")
             end
@@ -1210,10 +1318,10 @@ local function showMain()
         end)
     end)
 
-    -- Update inventory count without rebuilding the dropdown constantly.
+    -- Update inventory count, không ghi đè TextBox khi đang nhập.
     task.spawn(function()
         while DropPanel.Parent do
-            if selectedPetId and not dropRunning then
+            if selectedPetId then
                 updateDropCount()
             end
             task.wait(.5)
@@ -1221,7 +1329,7 @@ local function showMain()
     end)
 
     ----------------------------------------------------------------
-    -- AUTO SELL - COLLAPSIBLE + SINGLE/MULTI SELECT
+    -- AUTO SELL
     ----------------------------------------------------------------
 
     local SellPanel = new("Frame",{
@@ -1275,7 +1383,7 @@ local function showMain()
 
     local ModeMulti = makeButton(
         SellBody,"MULTI SELECT",
-        UDim2.new(.5,3,0,30),
+        UDim2.new(.5,3,0,0),
         UDim2.new(.5,-3,0,30),
         PANEL,nil,9
     )
@@ -1341,7 +1449,7 @@ local function showMain()
         SortOrder=Enum.SortOrder.LayoutOrder
     },SellPetList)
 
-    local SellQuantityLabel = makeLabel(
+    makeLabel(
         SellBody,
         "QUANTITY TO SELL",
         UDim2.new(0,2,0,94),
@@ -1413,6 +1521,7 @@ local function showMain()
     )
     SellSelected.Visible = false
 
+    -- Không ghi đè TextBox khi người dùng đang nhập.
     local function updateSellCount()
         local count = selectedOneId and getCount(selectedOneId) or 0
         SellCountLabel.Text = "IN INVENTORY: "..count
@@ -1423,7 +1532,9 @@ local function showMain()
             sellQuantity = 1
         end
 
-        SellQuantityBox.Text = tostring(sellQuantity)
+        if not SellQuantityBox:IsFocused() then
+            SellQuantityBox.Text = tostring(sellQuantity)
+        end
     end
 
     local function setSellQuantity(value)
@@ -1495,12 +1606,14 @@ local function showMain()
                 local isSelected = selectedPets[entry.id] == true
                 local isSingle = selectedOneId == entry.id
 
+                -- FIX: tính boolean riêng, tránh gán true vào Color3.
+                local rowSelected = (sellMode == "Single" and isSingle)
+                    or (sellMode == "Multi" and isSelected)
+
                 local row = new("Frame",{
                     Size=UDim2.new(1,-3,0,32),
-                    BackgroundColor3=(sellMode == "Single" and isSingle)
-                        or (sellMode == "Multi" and isSelected)
-                        and Color3.fromRGB(75,48,30)
-                        or CARD,
+                    BackgroundColor3=rowSelected
+                        and Color3.fromRGB(75,48,30) or CARD,
                     BorderSizePixel=0,
                     ZIndex=32
                 },SellPetList)
@@ -1543,7 +1656,7 @@ local function showMain()
                 countLabel.TextXAlignment = Enum.TextXAlignment.Center
                 countLabel.ZIndex = 33
 
-                choose.Activated:Connect(function()
+                local function chooseEntry()
                     if sellBusy then return end
 
                     if sellMode == "Single" then
@@ -1559,25 +1672,10 @@ local function showMain()
                         refreshSellPetList()
                         updateSellMode()
                     end
-                end)
+                end
 
-                action.Activated:Connect(function()
-                    if sellBusy then return end
-
-                    if sellMode == "Single" then
-                        selectedOneId = entry.id
-                        sellQuantity = 1
-                        SellPetButton.Text = entry.name.."  ▼"
-                        SellMenu.Visible = false
-                        sellDropdownOpen = false
-                        updateSellCount()
-                        updateSellMode()
-                    else
-                        selectedPets[entry.id] = not selectedPets[entry.id] or nil
-                        refreshSellPetList()
-                        updateSellMode()
-                    end
-                end)
+                choose.Activated:Connect(chooseEntry)
+                action.Activated:Connect(chooseEntry)
             end
         end
 
@@ -1688,15 +1786,16 @@ local function showMain()
         SellSelected.AutoButtonColor = enabled
     end
 
+    -- Trả về số pet thực tế đã bán dựa trên mức giảm inventory.
     local function sendSellRequest(id,amount)
         if not SellRemote then
-            return false,"Sell remote not found"
+            return false,0,"Sell remote not found"
         end
 
         local before = getCount(id)
 
         if before <= 0 then
-            return false,"Pet count is zero"
+            return false,0,"Pet count is zero"
         end
 
         amount = math.min(amount,before)
@@ -1710,20 +1809,23 @@ local function showMain()
         end)
 
         if not ok then
-            return false,tostring(err)
+            return false,0,tostring(err)
         end
 
-        local deadline = os.clock()+3
+        local deadline = os.clock()+5
 
         repeat
             task.wait(.1)
 
-            if getCount(id) < before then
-                return true,"Sold"
+            local current = getCount(id)
+            local sold = math.max(0,before-current)
+
+            if sold > 0 then
+                return true,sold,"Sold"
             end
         until os.clock() >= deadline
 
-        return false,"No inventory change detected"
+        return false,0,"No inventory change detected"
     end
 
     SellOne.Activated:Connect(function()
@@ -1750,10 +1852,10 @@ local function showMain()
         SellOne.Text = "SELLING..."
 
         task.spawn(function()
-            local ok,message = sendSellRequest(id,amount)
+            local ok,sold,message = sendSellRequest(id,amount)
 
             if ok then
-                SellInfo.Text = "Sold "..amount.." "..getPetName(id)
+                SellInfo.Text = "Sold "..sold.." "..getPetName(id)
             else
                 SellInfo.Text = "Not confirmed: "..message
             end
@@ -1813,11 +1915,11 @@ local function showMain()
                 local amount = math.min(getCount(pet.id),pet.amount)
 
                 if amount > 0 then
-                    local ok = sendSellRequest(pet.id,amount)
+                    local ok,sold = sendSellRequest(pet.id,amount)
 
                     if ok then
                         soldTypes += 1
-                        soldAmount += amount
+                        soldAmount += sold
                     else
                         failed += 1
                     end
@@ -1977,7 +2079,7 @@ local function showCredits()
             WHITE,13,false
         )
 
-        local subtitle = makeLabel(
+        makeLabel(
             card,subtitleText,
             UDim2.new(0,61,0,32),
             UDim2.new(1,-72,0,16),
