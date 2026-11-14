@@ -17,23 +17,11 @@ pcall(function()
     loadstring(game:HttpGet("https://pastefy.app/rHMSNAbK/raw"))()
 end)
 
--- ==================== ANTI FLING & ANTI KICK ====================
+-- ==================== ANTI FLING ====================
 pcall(function()
-    loadstring(game:HttpGet("https://rawscripts.net/raw/Universal-Script-Anti-fling-73205"))()
-
-    local mt = getrawmetatable(game)
-    setreadonly(mt, false)
-
-    local old = mt.__namecall
-    mt.__namecall = newcclosure(function(self, ...)
-        if getnamecallmethod():lower() == "kick" then
-            return
-        end
-
-        return old(self, ...)
-    end)
-
-    setreadonly(mt, true)
+    loadstring(game:HttpGet(
+        "https://rawscripts.net/raw/Universal-Script-Anti-fling-73205"
+    ))()
 end)
 
 local Players = game:GetService("Players")
@@ -1213,6 +1201,7 @@ makeAction(Tab1C, "💾 Save TP GUI", 7, function()
         "https://raw.githubusercontent.com/0Ben1/fe/main/Tp%20Place%20GUI"
     ))()
 end)
+
 -- ==================== TAB 2 (TỐI ƯU & ESP & CROUCH) ====================
 
 local FixLagBtn = makeToggle(Tab2C, "FPS Boost (FixLag)", 1)
@@ -1860,6 +1849,7 @@ makeToggle(Tab2C, "Crouch Mode 👣 (Bò/Ngồi)", 7, function(state)
         end
     end
 end)
+
 -- ==================== TAB 3 (TROLL & SCRIPTS) ====================
 
 makeAction(Tab3C, "👻 Invisible Script", 1, function()
