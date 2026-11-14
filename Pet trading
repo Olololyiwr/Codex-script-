@@ -1,7 +1,7 @@
 
 --[[
     PET TRADING HUB
-    Smooth Gradient + Auto Drop + Auto Sell + Adidas Animation
+    Compact Sidebar + Smooth Gradient + Auto Drop + Auto Sell + Adidas Animation
     Original Script: olololyiwr
     UI Design & Scripting Assistant: JAMES
 
@@ -32,7 +32,9 @@ local MUTED = Color3.fromRGB(155,157,168)
 
 local function new(class,props,parent)
     local obj = Instance.new(class)
-    for k,v in pairs(props or {}) do obj[k] = v end
+    for k,v in pairs(props or {}) do
+        obj[k] = v
+    end
     obj.Parent = parent
     return obj
 end
@@ -55,7 +57,7 @@ local function tween(obj,info,props)
     return t
 end
 
--- SMOOTH PET NAME EFFECTS
+-- PET NAME EFFECTS
 
 local ColoredGradient = ColorSequence.new({
     ColorSequenceKeypoint.new(0,Color3.fromRGB(0,255,255)),
@@ -94,11 +96,15 @@ local function applyPetNameEffect(label,category)
         Offset=Vector2.new(-1,0)
     },label)
 
-    local duration = category == "Rainbow" and 5 or 4
-
     TweenService:Create(
         gradient,
-        TweenInfo.new(duration,Enum.EasingStyle.Linear,Enum.EasingDirection.InOut,-1,true),
+        TweenInfo.new(
+            category == "Rainbow" and 5 or 4,
+            Enum.EasingStyle.Linear,
+            Enum.EasingDirection.InOut,
+            -1,
+            true
+        ),
         {Offset=Vector2.new(1,0)}
     ):Play()
 
@@ -208,18 +214,115 @@ end)
 -- INVENTORY
 
 local Inventory
+
 pcall(function()
-    Inventory = Player:WaitForChild("PlayerGui")
+    Inventory = PlayerGui
         :WaitForChild("ShopAndInventoryGui")
         :WaitForChild("InventoryFrame")
         :WaitForChild("ScrollingFrame")
 end)
 
-local dropRunning = false
-local selectedPetId = nil
-local selectedPetName = nil
-local dropInitialCount = 0
-local dropTarget = 0
+local function readObjectText(obj)
+    local ok,value = pcall(function()
+        return obj.Text
+    end)
+
+    if ok and value ~= nil then
+        return tostring(value)
+    end
+
+    return nil
+end
+
+local function parseCount(text)
+    if not text then return nil end
+
+    local cleaned = tostring(text):gsub(",","")
+    local number = cleaned:match("[xX]%s*(%d+)")
+        or cleaned:match("(%d+)%s*[xX]")
+
+    return tonumber(number)
+end
+
+local function getCount(id)
+    if not Inventory or not id then return 0 end
+
+    local item = Inventory:FindFirstChild(tostring(id))
+    if not item then return 0 end
+
+    -- Check common count values and labels first.
+    for _,obj in ipairs(item:GetDescendants()) do
+        local lowerName = string.lower(obj.Name)
+
+        if lowerName == "itemcount"
+            or lowerName == "count"
+            or lowerName == "amount"
+            or lowerName == "quantity" then
+
+            local text = readObjectText(obj)
+            local number = parseCount(text)
+
+            if number then return number end
+
+            local ok,value = pcall(function()
+                return obj.Value
+            end)
+
+            if ok and tonumber(value) then
+                return tonumber(value)
+            end
+        end
+    end
+
+    -- Check attributes used by some inventory interfaces.
+    for _,attribute in ipairs({"ItemCount","Count","Amount","Quantity"}) do
+        local value = item:GetAttribute(attribute)
+        if tonumber(value) then
+            return tonumber(value)
+        end
+    end
+
+    -- Last fallback: only accept text that looks like a quantity.
+    for _,obj in ipairs(item:GetDescendants()) do
+        local text = readObjectText(obj)
+        local number = parseCount(text)
+
+        if number and number > 0 then
+            return number
+        end
+    end
+
+    return 0
+end
+
+local function getPetName(id)
+    if not Inventory then return "Pet "..tostring(id) end
+
+    local item = Inventory:FindFirstChild(tostring(id))
+    if not item then return "Pet "..tostring(id) end
+
+    for _,name in ipairs({"NameLabel","PetName","DisplayName","ItemName"}) do
+        local label = item:FindFirstChild(name,true)
+        local text = label and readObjectText(label)
+
+        if text and text ~= "" and not tonumber(text) then
+            return text
+        end
+    end
+
+    for _,obj in ipairs(item:GetDescendants()) do
+        local text = readObjectText(obj)
+
+        if text and text ~= ""
+            and not tonumber(text)
+            and not parseCount(text)
+            and string.lower(obj.Name) ~= "itemcount" then
+            return text
+        end
+    end
+
+    return "Pet "..tostring(id)
+end
 
 local function getHeldPet()
     local char = Player.Character
@@ -232,23 +335,19 @@ local function getHeldPet()
     end
 end
 
-local function getCount(id)
-    if not Inventory or not id then return 0 end
+local dropRunning = false
+local selectedPetId = nil
+local selectedPetName = nil
+local dropInitialCount = 0
+local dropTarget = 0
 
-    local item = Inventory:FindFirstChild(tostring(id))
-    if not item then return 0 end
+local function getDropProgress()
+    if not selectedPetId then return 0 end
 
-    local countLabel = item:FindFirstChild("ItemCount", true)
-    if not countLabel or not countLabel:IsA("TextLabel") then
-        return 0
-    end
-
-    local raw = tostring(countLabel.Text)
-    local number = raw:match("[%d,]+")
-    if not number then return 0 end
-
-    return tonumber(number:gsub(",", "")) or 0
+    local current = getCount(selectedPetId)
+    return math.max(0,dropInitialCount-current)
 end
+
 -- ADIDAS ANIMATION
 
 local AnimationIds = {
@@ -329,7 +428,7 @@ local Main = new("Frame",{
     Name="Main",
     AnchorPoint=Vector2.new(.5,.5),
     Position=UDim2.new(.5,0,.52,0),
-    Size=UDim2.new(.9,0,.76,0),
+    Size=UDim2.new(.94,0,.78,0),
     BackgroundColor3=DARK,
     BorderSizePixel=0
 },Gui)
@@ -337,8 +436,8 @@ corner(Main,16)
 stroke(Main,ORANGE,1.5,.15)
 
 new("UISizeConstraint",{
-    MinSize=Vector2.new(290,350),
-    MaxSize=Vector2.new(520,650)
+    MinSize=Vector2.new(310,350),
+    MaxSize=Vector2.new(560,680)
 },Main)
 
 -- HEADER
@@ -375,6 +474,7 @@ task.spawn(function()
             Enum.ThumbnailSize.Size100x100
         )
     end)
+
     if ok then Avatar.Image = image end
 end)
 
@@ -424,44 +524,45 @@ local Close = new("TextButton",{
 },Header)
 corner(Close,8)
 
--- NAVIGATION
+-- COMPACT LEFT SIDEBAR
 
 local Nav = new("Frame",{
-    Position=UDim2.new(0,10,0,76),
-    Size=UDim2.new(1,-20,0,38),
+    Position=UDim2.new(0,9,0,76),
+    Size=UDim2.new(0,105,1,-86),
     BackgroundTransparency=1
 },Main)
 
 new("UIListLayout",{
-    FillDirection=Enum.FillDirection.Horizontal,
+    FillDirection=Enum.FillDirection.Vertical,
     HorizontalAlignment=Enum.HorizontalAlignment.Center,
-    VerticalAlignment=Enum.VerticalAlignment.Center,
-    Padding=UDim.new(0,5)
+    VerticalAlignment=Enum.VerticalAlignment.Top,
+    Padding=UDim.new(0,6),
+    SortOrder=Enum.SortOrder.LayoutOrder
 },Nav)
 
 -- SEARCH
 
 local Search = new("TextBox",{
-    Position=UDim2.new(0,12,0,122),
-    Size=UDim2.new(1,-24,0,38),
+    Position=UDim2.new(0,123,0,76),
+    Size=UDim2.new(1,-135,0,34),
     BackgroundColor3=CARD,
-    PlaceholderText="🔎  Search pets...",
+    PlaceholderText="🔎 Search pets...",
     PlaceholderColor3=MUTED,
     Text="",
     TextColor3=WHITE,
     Font=Enum.Font.Gotham,
-    TextSize=13,
+    TextSize=12,
     ClearTextOnFocus=false,
     BorderSizePixel=0
 },Main)
-corner(Search,9)
+corner(Search,8)
 stroke(Search,ORANGE,1,.7)
 
 -- CONTENT
 
 local Content = new("Frame",{
-    Position=UDim2.new(0,12,0,169),
-    Size=UDim2.new(1,-24,1,-181),
+    Position=UDim2.new(0,123,0,118),
+    Size=UDim2.new(1,-135,1,-130),
     BackgroundTransparency=1
 },Main)
 
@@ -486,7 +587,7 @@ local function createList()
     },Content)
 
     new("UIListLayout",{
-        Padding=UDim.new(0,8),
+        Padding=UDim.new(0,7),
         SortOrder=Enum.SortOrder.LayoutOrder
     },scroll)
 
@@ -520,7 +621,9 @@ local function makeActionButton(parent,title,subtitle,callback,category)
         TextXAlignment=Enum.TextXAlignment.Left
     },button)
 
-    if category then applyPetNameEffect(nameLabel,category) end
+    if category then
+        applyPetNameEffect(nameLabel,category)
+    end
 
     new("TextLabel",{
         Position=UDim2.new(0,12,0,29),
@@ -550,14 +653,16 @@ local function makeActionButton(parent,title,subtitle,callback,category)
     end)
 
     button.MouseLeave:Connect(function()
-        tween(button,TweenInfo.new(.15),{BackgroundColor3=CARD})
+        tween(button,TweenInfo.new(.15),{
+            BackgroundColor3=CARD
+        })
     end)
 
     button.Activated:Connect(callback)
     return button
 end
 
--- AUTO DROP + AUTO SELL UI IN MAIN TAB
+-- MAIN TAB
 
 local function showMain()
     clearContent()
@@ -566,21 +671,21 @@ local function showMain()
     local scroll = createList()
 
     new("TextLabel",{
-        Size=UDim2.new(1,0,0,48),
+        Size=UDim2.new(1,0,0,35),
         BackgroundTransparency=1,
-        Text="🐰  ORIGINAL BUNNY",
+        Text="🐰 ORIGINAL BUNNY",
         TextColor3=ORANGE,
         Font=Enum.Font.GothamBold,
-        TextSize=17
+        TextSize=15
     },scroll)
 
     new("TextLabel",{
-        Size=UDim2.new(1,0,0,42),
+        Size=UDim2.new(1,0,0,38),
         BackgroundColor3=CARD,
-        Text="Original Bunny Fuse\nID: 10001",
+        Text="Original Bunny Fuse  •  ID: 10001",
         TextColor3=WHITE,
         Font=Enum.Font.Gotham,
-        TextSize=12,
+        TextSize=11,
         BorderSizePixel=0
     },scroll)
 
@@ -603,7 +708,7 @@ local function showMain()
         end
     )
 
-    -- AUTO DROP PANEL
+    -- AUTO DROP
 
     local DropPanel = new("Frame",{
         Size=UDim2.new(1,-4,0,190),
@@ -620,7 +725,7 @@ local function showMain()
         Text="⚡ AUTO DROP",
         TextColor3=ORANGE,
         Font=Enum.Font.GothamBold,
-        TextSize=15,
+        TextSize=14,
         TextXAlignment=Enum.TextXAlignment.Left
     },DropPanel)
 
@@ -631,7 +736,7 @@ local function showMain()
         Text="Waiting for pet selection...",
         TextColor3=WHITE,
         Font=Enum.Font.Gotham,
-        TextSize=11,
+        TextSize=10,
         TextXAlignment=Enum.TextXAlignment.Left
     },DropPanel)
 
@@ -642,7 +747,7 @@ local function showMain()
         Text="Status: Select a pet from inventory",
         TextColor3=MUTED,
         Font=Enum.Font.Gotham,
-        TextSize=10,
+        TextSize=9,
         TextXAlignment=Enum.TextXAlignment.Left
     },DropPanel)
 
@@ -655,7 +760,7 @@ local function showMain()
         PlaceholderColor3=MUTED,
         TextColor3=WHITE,
         Font=Enum.Font.Gotham,
-        TextSize=13,
+        TextSize=12,
         ClearTextOnFocus=false,
         BorderSizePixel=0
     },DropPanel)
@@ -668,7 +773,7 @@ local function showMain()
         Text="START",
         TextColor3=WHITE,
         Font=Enum.Font.GothamBold,
-        TextSize=12,
+        TextSize=11,
         BorderSizePixel=0
     },DropPanel)
     corner(Start,8)
@@ -680,12 +785,12 @@ local function showMain()
         Text="STOP",
         TextColor3=WHITE,
         Font=Enum.Font.GothamBold,
-        TextSize=12,
+        TextSize=11,
         BorderSizePixel=0
     },DropPanel)
     corner(Stop,8)
 
-    local function setStatus(message)
+    local function setDropStatus(message)
         if Status and Status.Parent then
             Status.Text = "Status: "..message
         end
@@ -693,34 +798,32 @@ local function showMain()
 
     local function stopDrop(message)
         dropRunning = false
-        if message then setStatus(message) end
+        if message then setDropStatus(message) end
     end
 
     Stop.Activated:Connect(function()
         stopDrop("Stopped")
     end)
 
-    local detectAlive = true
-
     task.spawn(function()
-        while detectAlive and DropPanel.Parent do
+        while DropPanel.Parent do
             if not dropRunning then
                 local id = getHeldPet()
 
                 if id then
                     selectedPetId = id
                     selectedPetName = getPetName(id)
-                    PetLabel.Text = "Selected: "..selectedPetName.."  ["..id.."]"
-                    setStatus("Ready to start")
+                    PetLabel.Text = "Selected: "..selectedPetName.." ["..id.."]"
+                    setDropStatus("Ready to start")
                 else
                     selectedPetId = nil
                     selectedPetName = nil
                     PetLabel.Text = "Waiting for pet selection..."
-                    setStatus("Select a pet from inventory")
+                    setDropStatus("Select a pet from inventory")
                 end
             end
 
-            task.wait(.15)
+            task.wait(.2)
         end
     end)
 
@@ -728,19 +831,21 @@ local function showMain()
         if dropRunning then return end
 
         if not AutoDropRemote or not Inventory then
-            setStatus("Game inventory/remote not found")
+            setDropStatus("Game inventory/remote not found")
             return
         end
 
         local amount = tonumber(Quantity.Text)
+
         if not amount or amount < 1 or amount%1 ~= 0 then
-            setStatus("Invalid quantity")
+            setDropStatus("Invalid quantity")
             return
         end
 
         local held = getHeldPet()
+
         if not held or held ~= selectedPetId then
-            setStatus("Take a pet first!")
+            setDropStatus("Take a pet first!")
             return
         end
 
@@ -748,17 +853,17 @@ local function showMain()
         dropInitialCount = getCount(held)
 
         if dropInitialCount < 1 then
-            setStatus("Pet not found in inventory")
+            setDropStatus("Pet not found in inventory")
             return
         end
 
         if amount > dropInitialCount then
-            setStatus("Not enough pets")
+            setDropStatus("Not enough pets")
             return
         end
 
         dropRunning = true
-        setStatus("Dropping 0/"..dropTarget)
+        setDropStatus("Dropping 0/"..dropTarget)
 
         task.spawn(function()
             local lastProgress = -1
@@ -768,7 +873,7 @@ local function showMain()
 
                 if progress ~= lastProgress then
                     lastProgress = progress
-                    setStatus("Dropped "..progress.."/"..dropTarget)
+                    setDropStatus("Dropped "..progress.."/"..dropTarget)
                 end
 
                 if progress >= dropTarget then
@@ -790,6 +895,7 @@ local function showMain()
                     )
 
                     local deadline = os.clock()+4
+
                     repeat
                         task.wait(.08)
                         currentHeld = getHeldPet()
@@ -803,6 +909,7 @@ local function showMain()
                         stopDrop("Take pet timeout")
                         break
                     end
+
                 elseif currentHeld == selectedPetId then
                     local before = getCount(selectedPetId)
 
@@ -814,8 +921,7 @@ local function showMain()
                     repeat
                         task.wait(.08)
 
-                        local nowCount = getCount(selectedPetId)
-                        if nowCount < before then
+                        if getCount(selectedPetId) < before then
                             countChanged = true
                             break
                         end
@@ -824,7 +930,7 @@ local function showMain()
                     if not dropRunning then break end
 
                     if not countChanged then
-                        setStatus("Waiting for inventory update...")
+                        setDropStatus("Waiting for inventory update...")
                         task.wait(.25)
                     end
                 else
@@ -835,19 +941,20 @@ local function showMain()
                 task.wait(.12)
             end
 
-            if dropRunning then dropRunning = false end
+            if dropRunning then
+                dropRunning = false
+            end
 
             if getDropProgress() >= dropTarget then
-                setStatus("Completed!")
+                setDropStatus("Completed!")
             end
         end)
     end)
-      
-      
-    -- AUTO SELL MULTI SELECT
+
+    -- AUTO SELL: SINGLE + MULTI SELECT
 
     local SellPanel = new("Frame",{
-        Size=UDim2.new(1,-4,0,390),
+        Size=UDim2.new(1,-4,0,445),
         BackgroundColor3=CARD,
         BorderSizePixel=0
     },scroll)
@@ -856,9 +963,9 @@ local function showMain()
 
     new("TextLabel",{
         Position=UDim2.new(0,12,0,8),
-        Size=UDim2.new(1,-24,0,24),
+        Size=UDim2.new(1,-24,0,23),
         BackgroundTransparency=1,
-        Text="💰 AUTO SELL - SELECT PETS",
+        Text="💰 AUTO SELL",
         TextColor3=ORANGE,
         Font=Enum.Font.GothamBold,
         TextSize=14,
@@ -866,19 +973,30 @@ local function showMain()
     },SellPanel)
 
     local Info = new("TextLabel",{
-        Position=UDim2.new(0,12,0,34),
+        Position=UDim2.new(0,12,0,32),
         Size=UDim2.new(1,-24,0,20),
         BackgroundTransparency=1,
-        Text="Select pets you want to sell",
+        Text="Tap a pet to choose one, tick boxes to multi-sell",
         TextColor3=MUTED,
+        Font=Enum.Font.Gotham,
+        TextSize=9,
+        TextXAlignment=Enum.TextXAlignment.Left
+    },SellPanel)
+
+    local SelectedLabel = new("TextLabel",{
+        Position=UDim2.new(0,12,0,52),
+        Size=UDim2.new(1,-24,0,18),
+        BackgroundTransparency=1,
+        Text="Single pet: None",
+        TextColor3=WHITE,
         Font=Enum.Font.Gotham,
         TextSize=10,
         TextXAlignment=Enum.TextXAlignment.Left
     },SellPanel)
 
     local PetList = new("ScrollingFrame",{
-        Position=UDim2.new(0,10,0,60),
-        Size=UDim2.new(1,-20,0,255),
+        Position=UDim2.new(0,10,0,76),
+        Size=UDim2.new(1,-20,0,245),
         BackgroundColor3=PANEL,
         BorderSizePixel=0,
         ScrollBarThickness=3,
@@ -888,230 +1006,386 @@ local function showMain()
     },SellPanel)
     corner(PetList,8)
 
-    local ListLayout = new("UIListLayout",{
-        Padding=UDim.new(0,5),
+    new("UIListLayout",{
+        Padding=UDim.new(0,4),
         SortOrder=Enum.SortOrder.LayoutOrder
     },PetList)
 
     new("UIPadding",{
-        PaddingTop=UDim.new(0,6),
-        PaddingLeft=UDim.new(0,6),
-        PaddingRight=UDim.new(0,6),
-        PaddingBottom=UDim.new(0,6)
+        PaddingTop=UDim.new(0,5),
+        PaddingLeft=UDim.new(0,5),
+        PaddingRight=UDim.new(0,5),
+        PaddingBottom=UDim.new(0,5)
     },PetList)
 
     local selectedPets = {}
+    local selectedOneId = nil
     local sellBusy = false
 
-    local function refreshPetList()
-        for _,v in ipairs(PetList:GetChildren()) do
-            if v:IsA("TextButton") then
-                v:Destroy()
-            end
-        end
+    local function getInventoryPetItems()
+        local results = {}
+        local seen = {}
 
-        if not Inventory then return end
-
-        local found = 0
+        if not Inventory then return results end
 
         for _,item in ipairs(Inventory:GetChildren()) do
             local id = tonumber(item.Name)
 
-            if id then
-                local count = getCount(id)
+            if id and not seen[id] then
+                seen[id] = true
+                table.insert(results,{
+                    id=id,
+                    item=item
+                })
+            end
+        end
 
-                if count > 0 then
-                    found += 1
+        return results
+    end
 
-                    local nameLabel = item:FindFirstChild("NameLabel",true)
-                    local petName = nameLabel and nameLabel.Text or ("Pet "..id)
+    local function updateSelectedLabel()
+        if selectedOneId then
+            SelectedLabel.Text = "Single pet: "
+                ..getPetName(selectedOneId)
+                .." ["..selectedOneId.."]"
+        else
+            SelectedLabel.Text = "Single pet: None"
+        end
+    end
 
-                    local isSelected = selectedPets[id] == true
+    local function refreshPetList()
+        for _,child in ipairs(PetList:GetChildren()) do
+            if child:IsA("GuiObject") and not child:IsA("UIListLayout")
+                and not child:IsA("UIPadding") then
+                child:Destroy()
+            end
+        end
 
-                    local row = new("TextButton",{
-                        Size=UDim2.new(1,-4,0,37),
-                        BackgroundColor3=isSelected
-                            and Color3.fromRGB(75,48,30)
-                            or CARD,
-                        Text="",
-                        BorderSizePixel=0,
-                        AutoButtonColor=false
-                    },PetList)
-                    corner(row,7)
+        if not Inventory then
+            Info.Text = "Inventory not found"
+            return
+        end
 
-                    new("TextLabel",{
-                        Position=UDim2.new(0,8,0,0),
-                        Size=UDim2.new(1,-85,1,0),
-                        BackgroundTransparency=1,
-                        Text=(isSelected and "☑ " or "□ ")..petName,
-                        TextColor3=WHITE,
-                        Font=Enum.Font.Gotham,
-                        TextSize=11,
-                        TextXAlignment=Enum.TextXAlignment.Left
-                    },row)
+        local found = 0
 
-                    new("TextLabel",{
-                        Position=UDim2.new(1,-75,0,0),
-                        Size=UDim2.fromOffset(67,37),
-                        BackgroundTransparency=1,
-                        Text="x"..count,
-                        TextColor3=ORANGE,
-                        Font=Enum.Font.GothamBold,
-                        TextSize=12
-                    },row)
+        for _,entry in ipairs(getInventoryPetItems()) do
+            local id = entry.id
+            local count = getCount(id)
 
-                    row.Activated:Connect(function()
-                        if selectedPets[id] then
-                            selectedPets[id] = nil
-                        else
-                            selectedPets[id] = true
-                        end
+            if count > 0 then
+                found += 1
 
-                        refreshPetList()
-                    end)
-                else
-                    selectedPets[id] = nil
+                local isChecked = selectedPets[id] == true
+                local isSingle = selectedOneId == id
+
+                local row = new("Frame",{
+                    Size=UDim2.new(1,-3,0,37),
+                    BackgroundColor3=isSingle
+                        and Color3.fromRGB(75,48,30)
+                        or (isChecked and Color3.fromRGB(54,43,34) or CARD),
+                    BorderSizePixel=0
+                },PetList)
+                corner(row,7)
+
+                local choose = new("TextButton",{
+                    Position=UDim2.new(0,4,0,3),
+                    Size=UDim2.new(1,-78,1,-6),
+                    BackgroundTransparency=1,
+                    Text="",
+                    AutoButtonColor=false
+                },row)
+
+                new("TextLabel",{
+                    Position=UDim2.new(0,5,0,0),
+                    Size=UDim2.new(1,0,1,0),
+                    BackgroundTransparency=1,
+                    Text=(isSingle and "● " or "○ ")..getPetName(id),
+                    TextColor3=isSingle and ORANGE or WHITE,
+                    Font=Enum.Font.Gotham,
+                    TextSize=10,
+                    TextXAlignment=Enum.TextXAlignment.Left
+                },choose)
+
+                local check = new("TextButton",{
+                    Position=UDim2.new(1,-70,0,5),
+                    Size=UDim2.fromOffset(25,27),
+                    BackgroundColor3=isChecked and ORANGE or PANEL,
+                    Text=isChecked and "✓" or "",
+                    TextColor3=WHITE,
+                    Font=Enum.Font.GothamBold,
+                    TextSize=14,
+                    BorderSizePixel=0,
+                    AutoButtonColor=false
+                },row)
+                corner(check,6)
+                stroke(check,ORANGE,1,.5)
+
+                new("TextLabel",{
+                    Position=UDim2.new(1,-42,0,0),
+                    Size=UDim2.fromOffset(36,37),
+                    BackgroundTransparency=1,
+                    Text="x"..count,
+                    TextColor3=ORANGE,
+                    Font=Enum.Font.GothamBold,
+                    TextSize=10
+                },row)
+
+                choose.Activated:Connect(function()
+                    selectedOneId = id
+                    updateSelectedLabel()
+                    refreshPetList()
+                end)
+
+                check.Activated:Connect(function()
+                    selectedPets[id] = not selectedPets[id] or nil
+                    refreshPetList()
+                end)
+            else
+                selectedPets[id] = nil
+
+                if selectedOneId == id then
+                    selectedOneId = nil
+                    updateSelectedLabel()
                 end
             end
         end
 
         Info.Text = found.." pet types found"
+        updateSelectedLabel()
     end
 
+    local SelectAll = new("TextButton",{
+        Position=UDim2.new(0,10,0,327),
+        Size=UDim2.new(1,-20,0,28),
+        BackgroundColor3=PANEL,
+        Text="☑  SELECT ALL",
+        TextColor3=ORANGE,
+        Font=Enum.Font.GothamBold,
+        TextSize=10,
+        BorderSizePixel=0
+    },SellPanel)
+    corner(SelectAll,7)
+
+    SelectAll.Activated:Connect(function()
+        local allSelected = true
+        local entries = getInventoryPetItems()
+
+        for _,entry in ipairs(entries) do
+            if getCount(entry.id) > 0 and not selectedPets[entry.id] then
+                allSelected = false
+                break
+            end
+        end
+
+        if allSelected then
+            table.clear(selectedPets)
+            SelectAll.Text = "☑  SELECT ALL"
+        else
+            for _,entry in ipairs(entries) do
+                if getCount(entry.id) > 0 then
+                    selectedPets[entry.id] = true
+                end
+            end
+            SelectAll.Text = "☑  DESELECT ALL"
+        end
+
+        refreshPetList()
+    end)
+
+    local SellOne = new("TextButton",{
+        Position=UDim2.new(0,10,0,362),
+        Size=UDim2.new(.5,-15,0,35),
+        BackgroundColor3=ORANGE,
+        Text="SELL ONE",
+        TextColor3=WHITE,
+        Font=Enum.Font.GothamBold,
+        TextSize=11,
+        BorderSizePixel=0
+    },SellPanel)
+    corner(SellOne,8)
+
     local SellSelected = new("TextButton",{
-        Position=UDim2.new(0,10,0,328),
-        Size=UDim2.new(1,-20,0,42),
+        Position=UDim2.new(.5,5,0,362),
+        Size=UDim2.new(.5,-15,0,35),
         BackgroundColor3=Color3.fromRGB(45,145,80),
         Text="SELL SELECTED",
         TextColor3=WHITE,
         Font=Enum.Font.GothamBold,
-        TextSize=13,
+        TextSize=10,
         BorderSizePixel=0
     },SellPanel)
-    corner(SellSelected,9)
+    corner(SellSelected,8)
+
+    local function setSellButtons(enabled)
+        SellOne.Active = enabled
+        SellSelected.Active = enabled
+        SellOne.AutoButtonColor = enabled
+        SellSelected.AutoButtonColor = enabled
+    end
+
+    local function sendSellRequest(id,amount)
+        if not SellRemote then
+            return false,"Sell remote not found"
+        end
+
+        local before = getCount(id)
+
+        if before <= 0 then
+            return false,"Pet count is zero"
+        end
+
+        amount = math.min(amount,before)
+
+        local ok,err = pcall(function()
+            SellRemote:FireServer("sell",id,amount)
+
+            -- The second event is only sent when this pet is currently held.
+            if getHeldPet() == tostring(id) and PickAndDropRemote then
+                PickAndDropRemote:FireServer("Sell")
+            end
+        end)
+
+        if not ok then
+            return false,tostring(err)
+        end
+
+        -- Verify by checking whether inventory count actually decreases.
+        local deadline = os.clock()+3
+
+        repeat
+            task.wait(.15)
+
+            local after = getCount(id)
+            if after < before then
+                return true,"Sold"
+            end
+        until os.clock() >= deadline
+
+        return false,"No inventory change detected"
+    end
+
+    SellOne.Activated:Connect(function()
+        if sellBusy then return end
+
+        if not selectedOneId then
+            Info.Text = "Tap a pet name to select one first"
+            return
+        end
+
+        local id = selectedOneId
+
+        if getCount(id) <= 0 then
+            Info.Text = "This pet is no longer in inventory"
+            refreshPetList()
+            return
+        end
+
+        sellBusy = true
+        setSellButtons(false)
+        SellOne.Text = "SELLING..."
+
+        task.spawn(function()
+            local ok,message = sendSellRequest(id,1)
+
+            if ok then
+                Info.Text = "Sold 1 "..getPetName(id)
+            else
+                Info.Text = "Sell not confirmed: "..message
+            end
+
+            task.wait(.2)
+            refreshPetList()
+
+            SellOne.Text = "SELL ONE"
+            sellBusy = false
+            setSellButtons(true)
+        end)
+    end)
 
     SellSelected.Activated:Connect(function()
         if sellBusy then return end
 
-        if not SellRemote or not PickAndDropRemote then
+        if not SellRemote then
             Info.Text = "Sell remote not found"
             return
         end
 
         local batch = {}
 
-        for id in pairs(selectedPets) do
-            local count = getCount(id)
+        for id,isSelected in pairs(selectedPets) do
+            if isSelected then
+                local count = getCount(id)
 
-            if count > 0 then
-                table.insert(batch,{
-                    id=id,
-                    amount=count
-                })
+                if count > 0 then
+                    table.insert(batch,{
+                        id=id,
+                        amount=count
+                    })
+                end
             end
         end
 
         if #batch == 0 then
-            Info.Text = "Select at least one pet"
+            Info.Text = "Tick at least one pet first"
             return
         end
 
         sellBusy = true
-        SellSelected.Active = false
+        setSellButtons(false)
         SellSelected.Text = "SELLING..."
 
         task.spawn(function()
-            local success = 0
+            local soldTypes = 0
+            local soldAmount = 0
+            local failed = 0
 
             for _,pet in ipairs(batch) do
                 if not SellPanel.Parent then break end
 
-                local currentCount = getCount(pet.id)
-                local amount = math.min(currentCount,pet.amount)
+                local amount = math.min(getCount(pet.id),pet.amount)
 
                 if amount > 0 then
-                    local ok = pcall(function()
-                        SellRemote:FireServer(
-                            "sell",
-                            pet.id,
-                            amount
-                        )
-
-                        PickAndDropRemote:FireServer("Sell")
-                    end)
+                    local ok = sendSellRequest(pet.id,amount)
 
                     if ok then
-                        success += 1
+                        soldTypes += 1
+                        soldAmount += amount
+                    else
+                        failed += 1
                     end
-
-                    task.wait(0.25)
                 end
+
+                task.wait(.2)
             end
 
             table.clear(selectedPets)
 
-            Info.Text = "Sale requests sent: "..success.."/"..#batch
+            if failed > 0 then
+                Info.Text = "Sold "..soldAmount.." pets; "..failed.." not confirmed"
+            else
+                Info.Text = "Sold "..soldAmount.." pets across "..soldTypes.." types"
+            end
 
-            task.wait(0.5)
+            task.wait(.3)
             refreshPetList()
 
             SellSelected.Text = "SELL SELECTED"
-            SellSelected.Active = true
             sellBusy = false
+            setSellButtons(true)
         end)
     end)
 
-    local RefreshButton = new("TextButton",{
-        Position=UDim2.new(0,10,0,370),
-        Size=UDim2.new(1,-20,0,1),
-        BackgroundTransparency=1,
-        Text="",
-        Visible=false
-    },SellPanel)
-
     task.spawn(function()
         while SellPanel.Parent do
-            refreshPetList()
+            if not sellBusy then
+                refreshPetList()
+            end
+
             task.wait(1)
         end
     end)
 
-    -- Keep the selected pet and inventory display updated.
-
-    task.spawn(function()
-        while SellPanel.Parent do
-            local held = getHeldPet()
-
-            if held then
-                sellSelectedId = held
-                sellSelectedName = getPetName(held)
-
-                SellPetLabel.Text =
-                    "Selected: "..sellSelectedName.." ["..held.."]"
-
-                local count = getCount(held)
-                SellCountLabel.Text = "Inventory: x"..tostring(count)
-
-                if not pendingSellId and not sellBusy then
-                    setSellStatus("Ready to sell")
-                end
-            else
-                sellSelectedId = nil
-                sellSelectedName = nil
-
-                SellPetLabel.Text = "Waiting for pet selection..."
-                SellCountLabel.Text = "Inventory: --"
-
-                if not pendingSellId and not sellBusy then
-                    setSellStatus("Hold a pet to select it")
-                end
-            end
-
-            task.wait(.2)
-        end
-    end)
-
-    -- ORIGINAL CREDITS BUTTON
+    -- CREDITS BUTTON
 
     makeActionButton(
         scroll,
@@ -1125,12 +1399,12 @@ local function showMain()
     )
 
     new("TextLabel",{
-        Size=UDim2.new(1,0,0,40),
+        Size=UDim2.new(1,0,0,35),
         BackgroundTransparency=1,
         Text="Choose Colored or Rainbow to browse pets.",
         TextColor3=MUTED,
         Font=Enum.Font.Gotham,
-        TextSize=11
+        TextSize=10
     },scroll)
 end
 
@@ -1181,7 +1455,7 @@ local function showPets(pets,category)
             Text="No pets found.",
             TextColor3=MUTED,
             Font=Enum.Font.Gotham,
-            TextSize=14
+            TextSize=13
         },scroll)
     end
 end
@@ -1285,11 +1559,13 @@ render = function()
     end
 end
 
--- TABS
+-- COMPACT TAB BUTTONS
+
+local TabButtons = {}
 
 local function makeTab(name,label)
     local button = new("TextButton",{
-        Size=UDim2.new(.25,-5,1,0),
+        Size=UDim2.new(1,0,0,40),
         BackgroundColor3=name == CurrentTab and ORANGE or CARD,
         Text=label,
         TextColor3=WHITE,
@@ -1298,18 +1574,22 @@ local function makeTab(name,label)
         BorderSizePixel=0,
         AutoButtonColor=false
     },Nav)
+
     corner(button,8)
+    stroke(button,ORANGE,name == CurrentTab and 1.2 or .7,.65)
+
+    TabButtons[name] = button
 
     button.Activated:Connect(function()
         CurrentTab = name
         Search.Text = ""
 
-        for _,item in ipairs(Nav:GetChildren()) do
-            if item:IsA("TextButton") then
-                tween(item,TweenInfo.new(.15),{
-                    BackgroundColor3=item == button and ORANGE or CARD
-                })
-            end
+        for tabName,item in pairs(TabButtons) do
+            local active = tabName == CurrentTab
+
+            tween(item,TweenInfo.new(.15),{
+                BackgroundColor3=active and ORANGE or CARD
+            })
         end
 
         render()
@@ -1337,7 +1617,7 @@ local Pill = new("TextButton",{
     Position=UDim2.new(.5,0,0,-55),
     Size=UDim2.fromOffset(165,38),
     BackgroundColor3=PANEL,
-    Text="🐾  PET TRADING HUB",
+    Text="🐾 PET TRADING HUB",
     TextColor3=ORANGE,
     Font=Enum.Font.GothamBold,
     TextSize=12,
@@ -1353,6 +1633,7 @@ local busy = false
 
 Minimize.Activated:Connect(function()
     if busy or isMinimized then return end
+
     busy = true
     isMinimized = true
 
@@ -1374,6 +1655,7 @@ end)
 
 Pill.Activated:Connect(function()
     if busy or not isMinimized then return end
+
     busy = true
 
     tween(Pill,TweenInfo.new(.2),{
@@ -1381,6 +1663,7 @@ Pill.Activated:Connect(function()
     })
 
     task.wait(.18)
+
     Pill.Visible = false
     Main.Visible = true
     Main.Position = UDim2.new(.5,0,.58,0)
@@ -1421,4 +1704,4 @@ tween(Main,TweenInfo.new(.4,Enum.EasingStyle.Quart,Enum.EasingDirection.Out),{
 
 render()
 
-print("[Pet Trading Hub] Loaded - Smooth Gradient / Auto Drop / Auto Sell / Adidas Animation")
+print("[Pet Trading Hub] Loaded - Compact Sidebar / Auto Drop / Auto Sell / Adidas Animation")
